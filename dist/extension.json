@@ -1,0 +1,51 @@
+{
+    "name": "PoolPartyBof",
+    "version": "1.0.0",
+    "command_name": "PoolPartyBof",
+    "extension_author": "0xEr3bus",
+    "original_author": "0xDeku",
+    "repo_url": "https://github.com/0xEr3bus/PoolPartyBof/",
+    "help": "Inject shellcode by abusing Windows Thread Pools",
+    "long_help": "Sliver extension bundles variant 8 only (TP_TIMER). Use the Cobalt Strike CNA or Havoc script for variants 4-8.",
+    "depends_on": "coff-loader",
+    "entrypoint": "go",
+    "files": [
+        {
+            "os": "windows",
+            "arch": "amd64",
+            "path": "PoolPartyBof_V8.x64.o"
+        }
+    ],
+    "arguments": [
+        {
+            "name": "pid",
+            "desc": "PID of a process.",
+            "type": "int",
+            "optional": false
+        },
+        {
+            "name": "delay",
+            "desc": "Seconds to wait between major API steps (0 = none)",
+            "type": "int",
+            "optional": true
+        },
+        {
+            "name": "drip",
+            "desc": "1 = page-sized drip alloc/write of shellcode, 0 = one-shot (default)",
+            "type": "int",
+            "optional": true
+        },
+        {
+            "name": "drip_ms",
+            "desc": "Milliseconds to wait between drip pages (0 = none, capped at 1000). Requires drip=1",
+            "type": "int",
+            "optional": true
+        },
+        {
+            "name": "shellcodeFile",
+            "desc": "File that contains shellcode",
+            "type": "file",
+            "optional": false
+        }
+    ]
+}
