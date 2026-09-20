@@ -1,0 +1,20 @@
+{
+    "name": "PoolPartyBof-V6",
+    "version": "1.0.0",
+    "command_name": "poolparty-v6",
+    "extension_author": "an0nud4y",
+    "original_author": "Udayveer Singh",
+    "repo_url": "https://github.com/An0nUD4Y/PoolPartyBof",
+    "help": "PoolParty variant 6 inject (TP_JOB). Packs four ints always.",
+    "long_help": "Inject-only. Arguments: pid delay drip drip_ms shellcodeFile. Does not sanity-check. Nested jobs may fail assign. Run poolparty-v6-sanity first if unsure.",
+    "depends_on": "coff-loader",
+    "entrypoint": "go",
+    "files": [{"os": "windows", "arch": "amd64", "path": "PoolPartyBof_V6.x64.o"}],
+    "arguments": [
+        {"name": "pid", "desc": "PID of a process.", "type": "int", "optional": false},
+        {"name": "delay", "desc": "Seconds between major API steps (0 = none). Always packed.", "type": "int", "optional": false},
+        {"name": "drip", "desc": "1 = drip alloc, 0 = one-shot. Always packed.", "type": "int", "optional": false},
+        {"name": "drip_ms", "desc": "Milliseconds between drip pages. Always packed.", "type": "int", "optional": false},
+        {"name": "shellcodeFile", "desc": "File that contains shellcode", "type": "file", "optional": false}
+    ]
+}

