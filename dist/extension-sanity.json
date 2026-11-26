@@ -1,0 +1,27 @@
+{
+    "name": "poolparty-sanity",
+    "version": "1.0.0",
+    "command_name": "poolparty-sanity",
+    "extension_author": "an0nud4y",
+    "original_author": "Udayveer Singh",
+    "repo_url": "https://github.com/An0nUD4Y/PoolPartyBof",
+    "help": "Query-only PoolParty check (no inject). Variant 8 object; pid only.",
+    "long_help": "Does not inject. Opens the PID and checks that variant 8 can run: live x64 process (not WOW64), a Windows thread pool, IRTimer and timer-queue pointers. Prints PASS or FAIL. No shellcode, no remote memory write. For variants 4-7 use the CNA/Havoc/OC2 wrappers. Then inject with PoolPartyBof.",
+    "depends_on": "coff-loader",
+    "entrypoint": "go",
+    "files": [
+        {
+            "os": "windows",
+            "arch": "amd64",
+            "path": "PoolPartyBof_V8.x64.o"
+        }
+    ],
+    "arguments": [
+        {
+            "name": "pid",
+            "desc": "PID of a process (variant 8 implied by this object).",
+            "type": "int",
+            "optional": false
+        }
+    ]
+}

